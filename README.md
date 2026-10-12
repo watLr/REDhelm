@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, three are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.4.1).** Covered by tests and checked with real agents:
+> **Status: early release (0.4.2).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -22,7 +22,8 @@ work is landing, and which one needs you — and know which model is actually an
   started before REDhelm are filled in from Claude Code's record of their conversation.
 - **Message and Stop.** Message fills your prompt with `→ name: `; type and press Enter
   to send it to that agent instead of Claude (you can also type `→ name: message`
-  yourself). What you were typing to Claude is set aside and comes back after.
+  yourself). What you were typing to Claude is kept and comes back after. Changed your
+  mind? **Cancel** on the "Writing to …" line puts your draft back.
 - **Needs you.** An agent that sent you a message gets a card with its message and a
   **Reply** button.
 - **Where work lands.** A warning when two live agents edit the same file.

@@ -1,7 +1,7 @@
 import type { Elements } from 'claude-code'
 
 import type { Agent, Guard, Message, Note, SetupItem, Workspace } from '../types'
-import { capital, doing, excerpt, grouped, handleOf, isStale, kilo, minutes, modelWords, overlaps, short } from './model'
+import { capital, doing, excerpt, grouped, isStale, kilo, minutes, modelWords, overlaps, short } from './model'
 
 /**
  * REDhelm looks like an app, not a log: agents sit on cards with a colored initial, what needs
@@ -16,6 +16,8 @@ export type Els = Pick<Table, 'Box' | 'Text' | 'Button'> & { Input?: Table['Inpu
 export type Actions = {
   inspect: (id: string | null) => void
   compose: (id: string | null) => void
+  /** Leaves the reply: the prompt gets back what you were writing to Claude. */
+  cancelCompose: () => void
   stop: (id: string) => void
   dismiss: (messageId: string) => void
   open: () => void
@@ -157,15 +159,28 @@ function ModelNotice({ els, v }: { els: Els; v: View }) {
 }
 
 /** After Reply or Message: one short pointer to where you type. */
-function TypeHint({ els, handle, aside }: { els: Els; handle: string; aside: boolean }) {
-  const { Text } = els
-  return <Text color="warning" wrap="truncate-end">↓ type below · Enter sends to {handle}{aside ? ' · your draft is saved' : ''}</Text>
+/** While you write to an agent: who it goes to, and the way back. One line, at the top of REDhelm. */
+function Composer({ els, v, act }: { els: Els; v: View; act: Actions }) {
+  const { Box, Text } = els
+  const a = v.agents.find(x => x.id === v.composing)
+  if (!a) return null
+  return (
+    <Box justifyContent="space-between" gap={2}>
+      <Box flexShrink={1}>
+        <Box flexShrink={0}><Text color="warning">Writing to {label(a, v.lanes)}</Text></Box>
+        <Text color="subtle" wrap="truncate-end"> · Enter sends{v.aside ? ' · draft kept' : ''}</Text>
+      </Box>
+      <Box flexShrink={0}>
+        <Chip els={els} v={v} k="cancel-compose" text="Cancel" onPress={act.cancelCompose} />
+      </Box>
+    </Box>
+  )
 }
 
 function AgentButtons({ els, s, v, act, primary }: { els: Els; s: Strip; v: View; act: Actions; primary: string }) {
   const { Box } = els
   const a = s.agent
-  if (v.composing === a.id) return <TypeHint els={els} handle={v.handles[a.id] ?? handleOf(a)} aside={v.aside} />
+  if (v.composing === a.id) return <els.Text color="warning">↓ type below</els.Text>
   return (
     <Box gap={1}>
       <Chip els={els} v={v} k={`compose-${a.id}`} text={primary} primary onPress={() => act.compose(a.id)} />
@@ -370,12 +385,18 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
   return (
     <Box flexDirection="column" gap={1} width={columns}>
       <Box justifyContent="space-between" gap={2}>
-        <Box gap={1}>
+        <Box gap={1} flexShrink={0}>
           <Avatar els={els} a={a} v={v} />
           <Text bold>{label(a, v.lanes)}</Text>
           {ask && <Badge els={els} text="Asks you" color="warning" />}
         </Box>
-        <Text color="subtle">{doing(a, v.now)} · {minutes((a.endedAt ?? v.now) - a.startedAt)}</Text>
+        <Text color="subtle" wrap="truncate-end">{doing(a, v.now)} · {minutes((a.endedAt ?? v.now) - a.startedAt)}</Text>
+      </Box>
+
+      {/* What you can do comes first, so a long sheet never pushes it out of sight. */}
+      <Box justifyContent="space-between" gap={2}>
+        {live || ask ? <AgentButtons els={els} s={s} v={v} act={act} primary={ask ? 'Reply' : 'Message'} /> : <Text color="subtle">This agent has finished.</Text>}
+        <Text color="subtle">Esc to close</Text>
       </Box>
 
       {ask && (
@@ -414,11 +435,6 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
         {a.model && <Field els={els} name="Model"><Text>{modelWords(a.model, a.effort)}{a.context ? ` · ${kilo(a.context)} tokens of context` : ''}</Text></Field>}
         {(a.answer || (!live && a.thinking)) && <Field els={els} name="Last said"><Text color="subtle" wrap="wrap">{a.answer || a.thinking}</Text></Field>}
       </Box>
-
-      <Box justifyContent="space-between" gap={2}>
-        {live || ask ? <AgentButtons els={els} s={s} v={v} act={act} primary={ask ? 'Reply' : 'Message'} /> : <Text color="subtle">This agent has finished.</Text>}
-        <Text color="subtle">Esc to close</Text>
-      </Box>
     </Box>
   )
 }
@@ -435,6 +451,7 @@ function Tall({ els, v, act, columns }: { els: Els; v: View; act: Actions; colum
   return (
     <Box flexDirection="column" gap={1} width={columns}>
       <Header els={els} v={v} />
+      <Composer els={els} v={v} act={act} />
       <ModelNotice els={els} v={v} />
       <SetupCard els={els} v={v} act={act} />
       {needs.map(s => <NeedsCard key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
@@ -479,7 +496,7 @@ function Wide({ els, v, act, columns, rows, rule }: { els: Els; v: View; act: Ac
   const strips = rack(v)
   const needs = strips.filter(s => s.cocked)
   const working = strips.filter(s => !s.cocked && LIVE.has(s.agent.status))
-  const room = Math.max(0, rows - (rule ? 2 : 1) - (v.setup.length ? v.setup.length + 4 : 0)) // the rule and the header
+  const room = Math.max(0, rows - (rule ? 2 : 1) - (v.composing ? 1 : 0) - (v.setup.length ? v.setup.length + 4 : 0)) // the rule, the header, the composer
   const shownNeeds = needs.slice(0, room)
   const shownWorking = working.slice(0, Math.max(0, room - shownNeeds.length))
   const hidden = needs.length + working.length - shownNeeds.length - shownWorking.length
@@ -494,6 +511,7 @@ function Wide({ els, v, act, columns, rows, rule }: { els: Els; v: View; act: Ac
         </Box>
         {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <ModelNotice els={els} v={v} />}
       </Box>
+      <Composer els={els} v={v} act={act} />
       <SetupCard els={els} v={v} act={act} />
       {shownNeeds.map(s => <NeedsLine key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
       {shownWorking.map(s => <AgentRow key={s.agent.id} els={els} s={s} v={v} act={act} />)}

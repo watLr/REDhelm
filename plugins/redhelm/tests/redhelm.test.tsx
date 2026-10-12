@@ -414,7 +414,8 @@ describe('messaging an agent', () => {
     expect(await ui.find({ type: 'Text', text: /Ready to merge\?/ })).toBeDefined()
     await ui.press({ key: 'compose-a1' })
     await new Promise<void>(r => setTimeout(() => r(), 40))
-    expect(await ui.find({ type: 'Text', text: /type below · Enter sends to docs/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Writing to Docs/ })).toBeDefined()
+    expect(await ui.find({ key: 'cancel-compose' })).toBeDefined()
     expect(await ui.find({ key: 'compose-a1' })).toBeUndefined()
     await ui.unmount()
   })
@@ -649,6 +650,76 @@ describe('the sheet reads cleanly', () => {
     expect(await sheet.find({ type: 'Text', text: /Last said/ })).toBeDefined()
     expect(await sheet.find({ type: 'Text', text: /Thinking/ })).toBeUndefined()
     await sheet.unmount()
+    await ui.unmount()
+  })
+})
+
+describe('changing your mind after Reply or Message', () => {
+  const setup = async ($: any, on: any, draft: string) => {
+    const state = { box: draft, sent: [] as any[] }
+    on('prompt.read', () => ({ value: { text: state.box, cursor: state.box.length } }))
+    on('prompt.fill', (_: any, e: any) => ((state.box = e.text), { isFilled: true }))
+    on('session.send', (_: any, e: any) => (state.sent.push(e), { isDelivered: true }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const sheet = await openSheet($, ui, 'a1')
+    await sheet.press({ key: 'compose-a1' })
+    await sheet.unmount()
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    return { state, ui }
+  }
+
+  test('REDhelm says who you are writing to, with a Cancel that brings your draft back', async ($: any, on: any) => {
+    const { state, ui } = await setup($, on, 'a note I was writing to Claude')
+    expect(state.box).toBe('→ docs: ')
+    expect(await ui.find({ type: 'Text', text: /Writing to Docs/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /draft kept/ })).toBeDefined()
+    await ui.press({ key: 'cancel-compose' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(state.box).toBe('a note I was writing to Claude')
+    expect(await ui.find({ type: 'Text', text: /Writing to/ })).toBeUndefined()
+    expect(state.sent).toEqual([])
+    await ui.unmount()
+  })
+
+  test('with no draft, Cancel leaves an empty prompt', async ($: any, on: any) => {
+    const { state, ui } = await setup($, on, '')
+    await ui.press({ key: 'cancel-compose' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(state.box).toBe('')
+    await ui.unmount()
+  })
+
+  test('the bottom layout has the same Cancel', async ($: any, on: any) => {
+    const { state, ui } = await setup($, on, 'draft')
+    await ui.unmount()
+    const wide = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, placement: 'inline', bodyColumns: 140 } } as any)
+    expect(await wide.find({ type: 'Text', text: /Writing to Docs/ })).toBeDefined()
+    await wide.press({ key: 'cancel-compose' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(state.box).toBe('draft')
+    await wide.unmount()
+  })
+})
+
+describe('a reply abandoned by hand', () => {
+  test('deleting "→ name:" and sending to Claude ends the reply and brings the draft back', async ($: any, on: any) => {
+    let box = 'my draft'
+    on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+    on('prompt.fill', (_: any, e: any) => ((box = e.text), { isFilled: true }))
+    on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const sheet = await openSheet($, ui, 'a1')
+    await sheet.press({ key: 'compose-a1' })
+    await sheet.unmount()
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    await $.prompt.submit({ text: 'a question for Claude instead' })
+    await clock.advance(200)
+    expect(box).toBe('my draft')
+    expect(await ui.find({ type: 'Text', text: /Writing to/ })).toBeUndefined()
     await ui.unmount()
   })
 })

@@ -22,7 +22,8 @@ const USAGE = { plugin: 'redhelm', key: 'usage' } as const
 
 const agents = atom(AGENTS, {})
 const showDone = atom({ plugin: 'redhelm', key: 'showDone' } as const, false)
-const aside = atom({ plugin: 'redhelm', key: 'aside' } as const, false)
+const DRAFT = { plugin: 'redhelm', key: 'draft' } as const
+const draftKept = atom(DRAFT, null)
 const notes = atom({ plugin: 'redhelm', key: 'notes' } as const, [])
 const inbox = atom({ plugin: 'redhelm', key: 'inbox' } as const, [])
 const spaces = atom(WORKSPACES, [])
@@ -185,7 +186,6 @@ async function sync($: $) {
 /** The person's REDhelm settings (/config); a change there reloads the module with the new values. */
 let cfg: Settings = settings()
 /** A draft meant for Claude, held while you message an agent and put back after. */
-let setAside: string | undefined
 /** The person's theme, so REDhelm's surfaces match it. */
 let theme: 'light' | 'dark' = 'dark'
 /** The session's project root (set at session start). */
@@ -368,6 +368,21 @@ async function modelsReport($: $) {
   return lines.join('\n')
 }
 
+/** Leaves a reply unsent: an addressed prompt goes back to what you were writing to Claude (or empty). */
+async function leaveReply($: $) {
+  const draft = (await takeDraft($)) ?? ''
+  await update($, composing, () => null)
+  // Only an addressed prompt is REDhelm's to replace; anything else you have typed since is yours.
+  if (ADDRESS.test((await $.prompt.read()).text)) await $.prompt.fill({ text: draft, mode: 'replace' })
+}
+
+/** The draft kept while you write to an agent, handed back once and forgotten. */
+async function takeDraft($: $) {
+  const draft = (await $.state.get(DRAFT)).value ?? null
+  if (draft !== null) await update($, draftKept, () => null)
+  return draft
+}
+
 // Drawing
 
 function actions($: $): Actions {
@@ -397,15 +412,15 @@ function actions($: $): Actions {
         // What you were typing to Claude is set aside, never sent to the agent; it comes back after.
         const text = (await $.prompt.read()).text
         const already = text.match(ADDRESS)
-        if (!already && text.trim()) setAside = text
         const handle = handles(Object.values((await $.state.get(AGENTS)).value ?? {}))[id] ?? 'agent'
         const { isFilled } = await $.prompt.fill({ text: `→ ${handle}: ${already ? already[2] : ''}`, mode: 'replace' })
         if (isFilled) {
           await update($, composing, () => id)
-          await update($, aside, () => setAside !== undefined)
+          if (!already && text.trim()) await update($, draftKept, () => text)
         }
         else $.ui.toast('Could not reach the prompt; type → name: your message')
       })(),
+    cancelCompose: () => void quietly(() => leaveReply($)),
     dismiss: messageId => void update($, inbox, list => list.filter(m => m.id !== messageId)),
     stop: id =>
       void (async () => {
@@ -443,7 +458,7 @@ async function view($: $): Promise<View> {
     composing: await read($, composing),
     setup: await read($, setup),
     showDone: await read($, showDone),
-    aside: await read($, aside),
+    aside: (await read($, draftKept)) !== null,
     root,
     lanes: { ...tagged, ...laneNames(list) },
   }
@@ -538,14 +553,19 @@ export const register: Register = (on, options) => {
       if (!isDelivered) return { drop: `REDhelm: not delivered to ${name} (${reason ?? 'unknown reason'})` }
       await update($, inbox, list => list.filter(m => m.agentId !== to))
       await note($, { kind: 'reply', text: `you → ${name}: ${excerpt(text, 60)}`, agentId: to })
-      if (setAside !== undefined) {
-        const draft = setAside
-        setAside = undefined
-        await update($, aside, () => false)
+      const draft = await takeDraft($)
+      if (draft !== null) {
         // After Claude Code has cleared the prompt it just took.
         $.clock.after(100, () => void $.prompt.fill({ text: draft, mode: 'replace' }))
       }
       return { drop: `→ ${name}: sent` }
+    }
+    // A prompt to Claude while a reply was open (its "→ name:" was deleted): the reply is over.
+    if (!address && (await $.state.get(COMPOSING)).value) {
+      const draft = await takeDraft($)
+      await update($, composing, () => null)
+      // The draft set aside still comes back, once Claude Code has taken this prompt.
+      if (draft !== null) $.clock.after(100, () => void $.prompt.fill({ text: draft, mode: 'replace' }))
     }
     if (cfg.guard !== 'hold') return next(e)
     const g = (await $.state.get(GUARD)).value ?? {}
