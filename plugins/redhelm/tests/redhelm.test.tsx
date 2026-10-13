@@ -208,6 +208,18 @@ describe('the pane', () => {
     await ui.unmount()
   })
 
+  test('on the classic screen, where clicks never arrive, it says how to turn fullscreen on', async ($, on) => {
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
+    const props = { ...PANE.props, placement: 'inline', bodyColumns: 140 }
+    const classic = await $.ui.mount({ ...PANE, surface: 'terminal', props, viewport: { columns: 140, rows: 40, isFullscreen: false } } as any)
+    expect(await classic.find({ type: 'Text', text: /\/tui fullscreen/ })).toBeDefined()
+    await classic.unmount()
+    const full = await $.ui.mount({ ...PANE, surface: 'terminal', props, viewport: { columns: 140, rows: 40, isFullscreen: true } } as any)
+    expect(await full.find({ type: 'Text', text: /\/tui fullscreen/ })).toBeUndefined()
+    await full.unmount()
+  })
+
   test('/redhelm bottom moves the whole rack above the prompt, and /redhelm folds it', async ($, on) => {
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)

@@ -158,7 +158,6 @@ function ModelNotice({ els, v }: { els: Els; v: View }) {
   )
 }
 
-/** After Reply or Message: one short pointer to where you type. */
 /** While you write to an agent: who it goes to, and the way back. One line, at the top of REDhelm. */
 function Composer({ els, v, act }: { els: Els; v: View; act: Actions }) {
   const { Box, Text } = els
@@ -439,10 +438,16 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
   )
 }
 
+/** On the classic screen the terminal keeps the mouse, so no button here can be pressed. */
+function NoClicks({ els }: { els: Els }) {
+  const { Text } = els
+  return <Text color="warning" wrap="truncate-end">Buttons need the fullscreen layout: run /tui fullscreen</Text>
+}
+
 // Shapes
 
 /** Right dock: tall and narrow. */
-function Tall({ els, v, act, columns }: { els: Els; v: View; act: Actions; columns: number }) {
+function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actions; columns: number; classic: boolean }) {
   const { Box, Text } = els
   const strips = rack(v)
   const needs = strips.filter(s => s.cocked)
@@ -451,6 +456,7 @@ function Tall({ els, v, act, columns }: { els: Els; v: View; act: Actions; colum
   return (
     <Box flexDirection="column" gap={1} width={columns}>
       <Header els={els} v={v} />
+      {classic && <NoClicks els={els} />}
       <Composer els={els} v={v} act={act} />
       <ModelNotice els={els} v={v} />
       <SetupCard els={els} v={v} act={act} />
@@ -491,12 +497,12 @@ function NeedsLine({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actio
 }
 
 /** Bottom: wide and short. The same pieces, one line each; nothing wraps. */
-function Wide({ els, v, act, columns, rows, rule }: { els: Els; v: View; act: Actions; columns: number; rows: number; rule: boolean }) {
+function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View; act: Actions; columns: number; rows: number; rule: boolean; classic: boolean }) {
   const { Box, Text } = els
   const strips = rack(v)
   const needs = strips.filter(s => s.cocked)
   const working = strips.filter(s => !s.cocked && LIVE.has(s.agent.status))
-  const room = Math.max(0, rows - (rule ? 2 : 1) - (v.composing ? 1 : 0) - (v.setup.length ? v.setup.length + 4 : 0)) // the rule, the header, the composer
+  const room = Math.max(0, rows - (rule ? 2 : 1) - (classic ? 1 : 0) - (v.composing ? 1 : 0) - (v.setup.length ? v.setup.length + 4 : 0)) // the rule, the header, the hint, the composer
   const shownNeeds = needs.slice(0, room)
   const shownWorking = working.slice(0, Math.max(0, room - shownNeeds.length))
   const hidden = needs.length + working.length - shownNeeds.length - shownWorking.length
@@ -511,6 +517,7 @@ function Wide({ els, v, act, columns, rows, rule }: { els: Els; v: View; act: Ac
         </Box>
         {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <ModelNotice els={els} v={v} />}
       </Box>
+      {classic && <NoClicks els={els} />}
       <Composer els={els} v={v} act={act} />
       <SetupCard els={els} v={v} act={act} />
       {shownNeeds.map(s => <NeedsLine key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
@@ -520,13 +527,16 @@ function Wide({ els, v, act, columns, rows, rule }: { els: Els; v: View; act: Ac
   )
 }
 
-/** `rule`: draw the divider (the band above the prompt has no border of its own; a pane does). */
-export type Shape = { kind: 'tall' | 'wide'; columns: number; rows: number; rule?: boolean }
+/**
+ * `rule`: draw the divider (the band above the prompt has no border of its own; a pane does).
+ * `classic`: drawn on the main screen, not fullscreen, where the mouse never reaches the buttons.
+ */
+export type Shape = { kind: 'tall' | 'wide'; columns: number; rows: number; rule?: boolean; classic?: boolean }
 
 export function Panel({ els, v, act, shape }: { els: Els; v: View; act: Actions; shape: Shape }) {
   return shape.kind === 'tall'
-    ? <Tall els={els} v={v} act={act} columns={shape.columns} />
-    : <Wide els={els} v={v} act={act} columns={shape.columns} rows={shape.rows} rule={!!shape.rule} />
+    ? <Tall els={els} v={v} act={act} columns={shape.columns} classic={!!shape.classic} />
+    : <Wide els={els} v={v} act={act} columns={shape.columns} rows={shape.rows} rule={!!shape.rule} classic={!!shape.classic} />
 }
 
 /** With the panel closed: one line above the prompt, only when something needs you. */

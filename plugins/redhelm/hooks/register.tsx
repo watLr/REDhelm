@@ -724,7 +724,7 @@ export const register: Register = (on, options) => {
       els={elements($.ui.resolve(e), e.surface)}
       v={await view($)}
       act={actions($)}
-      shape={{ kind: e.props.placement === 'dock' ? 'tall' : 'wide', columns: e.props.bodyColumns, rows: e.viewport?.rows ?? 12 }}
+      shape={{ kind: e.props.placement === 'dock' ? 'tall' : 'wide', columns: e.props.bodyColumns, rows: e.viewport?.rows ?? 12, classic: e.surface === 'terminal' && e.viewport?.isFullscreen === false }}
     />
   })
 
@@ -742,7 +742,7 @@ export const register: Register = (on, options) => {
     const v = await view($)
     const act = actions($)
     if ((await read($, placement)) === 'bottom' && !(await read($, collapsed))) {
-      return <Panel els={els} v={v} act={act} shape={{ kind: 'wide', columns: e.props.bodyColumns, rows: Math.min(e.props.maxRows, 6), rule: true }} />
+      return <Panel els={els} v={v} act={act} shape={{ kind: 'wide', columns: e.props.bodyColumns, rows: Math.min(e.props.maxRows, 6), rule: true, classic: e.viewport?.isFullscreen === false }} />
     }
     return Alert({ els, v, act }) ?? next(e)
   })

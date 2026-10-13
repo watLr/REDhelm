@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, three are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.4.2).** Covered by tests and checked with real agents:
+> **Status: early release (0.4.3).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -62,6 +62,12 @@ The right sidebar needs Claude Code's fullscreen layout (`"tui": "fullscreen"`) 
 terminal at least 110 columns wide. That minimum is Claude Code's own and plugins cannot
 change it; in a narrower terminal, or the classic layout, REDhelm opens above the prompt
 instead.
+
+REDhelm's buttons need the fullscreen layout too: on the classic layout the terminal keeps
+the mouse, so clicks never reach them, and REDhelm says so under its name. Run
+`/tui fullscreen` to turn fullscreen on. Claude Code also switches fullscreen off by itself
+after a couple of launches that fail to start, and the classic layout stays until you run
+`/tui fullscreen` (or set `CLAUDE_CODE_NO_FLICKER=1`).
 
 ### Setup card
 
