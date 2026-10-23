@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Guard, Note, Placement, SetupItem } from '../types'
-import { DEFAULTS, LINES, activity, capital, fromConversation, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
+import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types'
+import { DEFAULTS, LINES, activity, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { laneNames, workspaces, type Io } from './sources'
 import { Alert, Panel, Sheet, type Actions, type Els, type View } from './view'
 
@@ -38,11 +38,14 @@ const placement = atom(PLACEMENT, 'right' as Placement)
 const collapsed = atom({ plugin: 'redhelm', key: 'collapsed' } as const, false)
 const setup = atom(SETUP, [] as SetupItem[])
 const usage = atom(USAGE, {})
+const release = atom({ plugin: 'redhelm', key: 'release' } as const, null as Release | null)
 
 const ENDED = new Set(['completed', 'failed', 'killed'])
 const LIVE = new Set(['pending', 'running', 'waiting'])
 /** How long an agent may be missing from Claude Code's list before REDhelm counts it as finished. */
 const GRACE_MS = 20_000
+/** How long a question stays after its agent ended. */
+const QUESTION_OUTLIVES_MS = 30 * 60_000
 
 /** Bookkeeping never gets in the way of the call it watches. */
 const quietly = async (work: () => Promise<unknown>) => {
@@ -178,12 +181,99 @@ async function sync($: $) {
     const was = current[id]
     if (was && LIVE.has(was.status) && ENDED.has(a.status) && (listed.has(id) || was.answer)) await announce($, id, a.status === 'failed', was.answer)
   }
-  // A message from an agent Claude Code has retired can no longer be answered: it stops asking for you.
-  // (Its words stay in the agent's notes.) One still listed, even finished, can still take a reply.
-  const answerable = (id: string) => listed.has(id) || LIVE.has(merged[id]?.status as Agent['status'])
+  // A question outlives its agent for a while: a reply still resumes a finished agent, even one gone from the list.
+  // Long after the agent ended it has gone stale and stops asking for you (its words stay in the agent's notes).
+  const answerable = (id: string) => {
+    const a = merged[id]
+    return listed.has(id) || (!!a && (LIVE.has(a.status) || at - (a.endedAt ?? at) < QUESTION_OUTLIVES_MS))
+  }
   const asks = await read($, inbox)
   if (asks.some(m => !answerable(m.agentId))) await update($, inbox, list => list.filter(m => answerable(m.agentId)))
   if (Object.values(merged).some(a => LIVE.has(a.status))) await update($, now, () => at)
+}
+
+// What agents send you
+
+/** The labels the model picks between; the first means the agent waits on you. */
+const ASKS = ['asks the person a question or for a decision', 'reports or informs, needs no answer'] as const
+
+/** Whether a message waits on an answer: the session's small model reads it; its words alone decide when it cannot. */
+async function isQuestion($: $, text: string) {
+  const label = await $.model.classify(text, ASKS).catch(() => undefined)
+  return label ? label === ASKS[0] : looksLikeQuestion(text)
+}
+
+/** When the main conversation last wrote to each agent, so a question it answered while REDhelm was still reading it is not shown. */
+const answeredAt = new Map<string, number>()
+
+/** A question asks for you; a report becomes what the agent last said. */
+async function received($: $, from: string, raw: string) {
+  const at = await $.clock.now()
+  const text = tidy(raw)
+  const name = await nameOf($, from)
+  if (await isQuestion($, text)) {
+    const answered = answeredAt.get(from)
+    if (answered !== undefined && answered >= at) return
+    await update($, inbox, list => [...list, { id: `${from}-${at}`, agentId: from, text, at, ask: true }].slice(-20))
+    await note($, { kind: 'ask', text: `${name}: ${excerpt(text, 60)}`, agentId: from })
+    if (cfg.agentToasts) $.ui.toast(`◆ ${name} asks you something`)
+  } else {
+    await patch($, from, () => ({ answer: text }))
+    await note($, { kind: 'report', text: `${name}: ${excerpt(text, 60)}`, agentId: from })
+    if (cfg.agentToasts) $.ui.toast(`${name}: ${excerpt(text, 70)}`)
+  }
+}
+
+// A newer REDhelm
+
+/** Where the published REDhelm says its version. */
+const MANIFEST = 'https://raw.githubusercontent.com/watLr/redhelm/main/plugins/redhelm/.claude-plugin/plugin.json'
+const CHECK_EVERY = 6 * 3_600_000
+const CHECK_SHARED_MS = 3_600_000
+
+/** Compares the installed REDhelm with the published one. A copy run from a local folder is its own source: nothing to offer. */
+async function checkRelease($: $) {
+  // One check serves every open session for an hour: they share REDhelm's store.
+  const at = await $.clock.now()
+  const kept = (await $.store.get('release')) as { at: number; id: string; installed: string; latest: string } | undefined
+  let seen = kept && at - kept.at < CHECK_SHARED_MS ? kept : undefined
+  if (!seen) {
+    const listed = await $.process.run(['claude', 'plugin', 'list', '--json'], { timeoutMs: 20_000 })
+    const mine = (JSON.parse(listed.stdout) as { id: string; version: string }[]).find(p => p.id.startsWith('redhelm@'))
+    if (!mine) return update($, release, () => null)
+    let latest = ''
+    if (!mine.id.endsWith('@inline')) {
+      const got = await $.http.fetch(MANIFEST)
+      if (!got.ok) return
+      latest = String((JSON.parse(got.text) as { version?: unknown }).version ?? '')
+    }
+    seen = { at, id: mine.id, installed: mine.version, latest }
+    await $.store.set('release', seen)
+  }
+  const { id, installed, latest } = seen
+  if (id.endsWith('@inline')) return update($, release, () => null)
+  await update($, release, was =>
+    was?.state === 'updated' || was?.state === 'updating' ? was
+      : isNewer(latest, installed) ? { id, installed, latest } : null)
+}
+
+/** Runs Claude Code's own plugin update; the new version loads on /reload-plugins or a restart. */
+async function updateNow($: $): Promise<string> {
+  const rel = await read($, release)
+  if (!rel) return 'REDhelm is up to date'
+  if (rel.state === 'updating') return `REDhelm is already updating to ${rel.latest}`
+  if (rel.state === 'updated') return `REDhelm ${rel.latest} is installed · run /reload-plugins to load it`
+  await update($, release, (r): Release | null => r && { ...r, state: 'updating', detail: undefined })
+  const market = rel.id.split('@')[1]!
+  await $.process.run(['claude', 'plugin', 'marketplace', 'update', market], { timeoutMs: 120_000 }).catch(() => undefined)
+  const r = await $.process.run(['claude', 'plugin', 'update', rel.id], { timeoutMs: 120_000 })
+    .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
+  const ok = r.exitCode === 0
+  if (ok) await $.store.delete('release').catch(() => undefined) // the next check reads the new version
+  await update($, release, (x): Release | null => x && { ...x, state: ok ? 'updated' : 'failed', detail: ok ? undefined : excerpt(r.stderr || r.stdout, 120) })
+  return ok
+    ? `REDhelm ${rel.latest} is installed · run /reload-plugins to load it`
+    : `REDhelm could not update: ${excerpt(r.stderr || r.stdout, 120) || 'unknown reason'} · try claude plugin update ${rel.id}`
 }
 
 // The model guard: what the person chose, what actually answers, and whether the session fell behind
@@ -426,16 +516,18 @@ function actions($: $): Actions {
         else $.ui.toast('Could not reach the prompt; type → name: your message')
       })(),
     cancelCompose: () => void quietly(() => leaveReply($)),
-    dismiss: messageId => void update($, inbox, list => list.filter(m => m.id !== messageId)),
+    dismiss: agentId => void update($, inbox, list => list.filter(m => m.agentId !== agentId)),
     stop: id =>
       void (async () => {
         const name = await nameOf($, id)
-        await $.tool.call({ tool: 'TaskStop', task_id: id })
+        // Typed narrowly: the full tool.call union is deeper than tsc will instantiate here.
+        await ($.tool.call as (input: { tool: 'TaskStop'; task_id: string }) => Promise<unknown>)({ tool: 'TaskStop', task_id: id })
         await note($, { kind: 'fail', text: `${name} stopped by you`, agentId: id })
       })(),
     toggleDone: () => void update($, showDone, x => !x),
     applySetup: () => void quietly(() => applySetup($)),
     skipSetup: () => void quietly(() => skipSetup($)),
+    update: () => void quietly(async () => $.ui.toast(await updateNow($))),
   }
 }
 
@@ -464,6 +556,7 @@ async function view($: $): Promise<View> {
     setup: await read($, setup),
     showDone: await read($, showDone),
     aside: (await read($, draftKept)) !== null,
+    release: await read($, release),
     root,
     lanes: { ...tagged, ...laneNames(list) },
   }
@@ -483,6 +576,7 @@ export const register: Register = (on, options) => {
     active = e.isInteractive
     if (!active) return next(e)
     hasPython = undefined
+    answeredAt.clear()
     shownStatus = null
     root = await $.session.root()
     homeDir = await home($).catch(() => '')
@@ -490,10 +584,15 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'redhelm',
       description: 'Your agents, their work and what needs you',
-      argumentHint: 'right | bottom | setup | models',
+      argumentHint: 'right | bottom | setup | models | update',
     })
     timers.forEach(t => t.cancel())
-    timers = [$.clock.every(1500, () => void quietly(() => sync($))), $.clock.every(5000, () => void quietly(() => refresh($)))]
+    timers = [
+      $.clock.every(1500, () => void quietly(() => sync($))),
+      $.clock.every(5000, () => void quietly(() => refresh($))),
+      $.clock.every(CHECK_EVERY, () => void quietly(() => checkRelease($))),
+    ]
+    $.clock.after(2000, () => void quietly(() => checkRelease($)))
     void quietly(async () => {
       const items = await setupItems($)
       await update($, setup, () => items)
@@ -514,6 +613,10 @@ export const register: Register = (on, options) => {
     autoOpened = true
     const arg = e.args.trim().toLowerCase()
     if (arg === 'models') return { text: await modelsReport($) }
+    if (arg === 'update') {
+      if (!(await read($, release))) await quietly(() => checkRelease($))
+      return { text: await updateNow($) }
+    }
     if (arg === 'setup') {
       const items = await setupItems($, true)
       await update($, setup, () => items)
@@ -691,7 +794,9 @@ export const register: Register = (on, options) => {
     // The main conversation writing to an agent that asked something: Claude answered it, so it no longer waits on you.
     if (active && !from && r.isDelivered) await quietly(async () => {
       const to = (await $.agent.list()).find(p => p.id === e.to || p.name === e.to || p.teammateId === e.to)?.id ?? (await agentNamed($, e.to))
-      if (!to || !(await read($, inbox)).some(m => m.agentId === to)) return
+      if (!to) return
+      answeredAt.set(to, await $.clock.now())
+      if (!(await read($, inbox)).some(m => m.agentId === to)) return
       await update($, inbox, list => list.filter(m => m.agentId !== to))
       if (e.origin.kind === 'model') await note($, { kind: 'reply', text: `Claude → ${await nameOf($, to)}: ${excerpt(tidy(e.text), 60)}`, agentId: to })
     })
@@ -699,13 +804,8 @@ export const register: Register = (on, options) => {
       const peers = await $.agent.list()
       const peer = peers.find(p => p.id === e.to || p.name === e.to || p.teammateId === e.to)
       if (peer) await patch($, from, () => ({ waitingOn: peer.name || excerpt(peer.description, 24) || 'another agent' }))
-      if (!peer) {
-        const at = await $.clock.now()
-        await update($, inbox, list => [...list, { id: `${from}-${at}`, agentId: from, text: tidy(e.text), at }].slice(-20))
-        const name = await nameOf($, from)
-        await note($, { kind: 'ask', text: `${name}: ${excerpt(e.text, 60)}`, agentId: from })
-        if (cfg.agentToasts) $.ui.toast(`◆ ${name} sent you a message`)
-      }
+      // Telling a question from a report takes a model call: the agent's send is not held for it.
+      if (!peer) void quietly(() => received($, from, e.text))
     })
     return r
   }).catch(($, e, next) => next(e)) // fail open: an error in REDhelm never holds your work)
@@ -738,6 +838,13 @@ export const register: Register = (on, options) => {
       act={actions($)}
       shape={{ kind: e.props.placement === 'dock' ? 'tall' : 'wide', columns: e.props.bodyColumns, rows: e.viewport?.rows ?? 12, classic: e.surface === 'terminal' && e.viewport?.isFullscreen === false }}
     />
+  })
+
+  /** The sheet closed by the person (Esc, its ✕) or by REDhelm: no agent is open any more, so its Details comes back. */
+  on('ui.close', async ($, e, next) => {
+    const r = await next(e)
+    if (e.id === SHEET) await quietly(() => update($, inspecting, () => null))
+    return r
   })
 
   on('ui.render', { component: 'Pane', requestId: SHEET }, async ($, e) => (

@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, three are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.4.5).** Covered by tests and checked with real agents:
+> **Status: early release (0.5.0).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -24,8 +24,15 @@ work is landing, and which one needs you — and know which model is actually an
   to send it to that agent instead of Claude (you can also type `→ name: message`
   yourself). What you were typing to Claude is kept and comes back after. Changed your
   mind? **Cancel** on the "Writing to …" line puts your draft back.
-- **Needs you.** An agent that sent you a message gets a card with its message and a
-  **Reply** button.
+- **Needs you.** An agent that asks you something gets a card with its question and a
+  **Reply** button. Claude Code's small, fast model tells a question from a report (with a
+  plain check of the wording if the model can't be reached); a report is not a question,
+  so it pops up briefly and becomes the agent's last words in its sheet instead. A
+  question clears once you or Claude answer it. From an agent that has ended, it stays
+  30 minutes (a reply still resumes that agent), with **Dismiss** to put it away sooner.
+- **Updates.** When a newer REDhelm is published, a quiet line at the bottom of the
+  panel says so, with **Update**. Nothing pops up. A copy run from a local folder is
+  its own source and is never offered one.
 - **Where work lands.** A warning when two live agents edit the same file.
 - **Workflows.** Picks up lane boards (`docs/aaa/board/lanes.json`), status boards
   (`.status-board/`), REDStudio (`.redstudio/`) and REDManager (`.redmanager/`) in the
@@ -55,6 +62,7 @@ Restart running sessions (`/restart`) to load it.
 | `/redhelm right` · `/redhelm bottom` | Sidebar beside the conversation, or a bar above the prompt |
 | `/redhelm setup` | Review the Claude Code settings REDhelm recommends |
 | `/redhelm models` | Which models actually answered this session, and recent switches |
+| `/redhelm update` | Install the newer REDhelm, if there is one (then `/reload-plugins`) |
 
 ![REDhelm above the prompt](docs/images/redhelm-bottom.png)
 

@@ -351,3 +351,26 @@ export const tidyPaths = (text: string, root: string, home: string) => {
   if (home) out = out.split(`${home}/`).join('~/')
   return out
 }
+
+/**
+ * Whether an agent's message waits on an answer, from its words alone: the fallback when the model
+ * cannot be asked. A question mark counts outside code and links; so do the plain ways of asking.
+ */
+export function looksLikeQuestion(text: string) {
+  const plain = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ').replace(/\bhttps?:\/\/\S+/g, ' ')
+  return /\?(?=\s|$|["')\]*_])/.test(plain) ||
+    /\b(should I|shall I|do you want|would you like|want me to|let me know|your (call|decision|approval|go-ahead|input|choice)|waiting (for|on) (you|your)|need (you|your)|please (confirm|approve|decide|choose|advise|review))\b/i.test(plain)
+}
+
+/** Whether version `a` is newer than `b`, number by number ("0.10.0" beats "0.9.9"); one unreadable never is. */
+export function isNewer(a: string, b: string) {
+  const parse = (v: string) => (/^\d+(\.\d+)*$/.test(v.trim()) ? v.trim().split('.').map(Number) : null)
+  const x = parse(a), y = parse(b)
+  if (!x || !y) return false
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0)
+    if (d) return d > 0
+  }
+  return false
+}
+

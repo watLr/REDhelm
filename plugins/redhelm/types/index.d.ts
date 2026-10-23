@@ -36,12 +36,16 @@ export type Agent = {
 
 export type Phase = 'exploring' | 'building' | 'checking' | 'delegating'
 
-export type NoteKind = 'spawn' | 'done' | 'fail' | 'ask' | 'reply' | 'guard'
+export type NoteKind = 'spawn' | 'done' | 'fail' | 'ask' | 'report' | 'reply' | 'guard'
 
 export type Note = { at: number; kind: NoteKind; text: string; agentId?: string }
 
 /** A message an agent addressed to the lead (you). */
-export type Message = { id: string; agentId: string; text: string; at: number }
+/** What an agent sent you. `ask`: it waits on an answer (absent on messages kept from before REDhelm told them apart). */
+export type Message = { id: string; agentId: string; text: string; at: number; ask?: boolean }
+
+/** A newer REDhelm than the one installed, and how updating it went. */
+export type Release = { id: string; installed: string; latest: string; state?: 'updating' | 'updated' | 'failed'; detail?: string }
 
 export type StageRow = { id: string; stages: Record<string, string>; note: string; at: number }
 
@@ -100,6 +104,7 @@ declare module 'claude-code' {
       showDone: boolean
       /** What you were writing to Claude, kept while you write to an agent; it comes back after. */
       draft: string | null
+      release: Release | null
       /** The agent whose sheet is open. */
       inspecting: string | null
       /** Whether the sheet shows the agent's whole brief. */

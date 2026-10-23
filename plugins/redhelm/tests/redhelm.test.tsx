@@ -4,7 +4,7 @@ import type { Agent } from '../types'
 
 /** The test runtime has timers; the hooks environment's declarations leave them out. */
 declare const setTimeout: (fn: () => void, ms: number) => unknown
-import { grouped, tidyPaths,
+import { grouped, tidyPaths, looksLikeQuestion, isNewer,
   DEFAULTS, activity, doing, handleOf, handles, settings, foldLanes, foldStatusBoard, isStale, kindOf, overlaps, parseRun, parseStandards, phase, remember, short, staleTarget,
 } from '../hooks/model'
 import { workspaces, type Io } from '../hooks/sources'
@@ -242,7 +242,7 @@ describe('the pane', () => {
 describe('the rack', () => {
   test('orders strips by who needs you next and pulls out the ones that do', async () => {
     const v = {
-      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, root: '/p', handles: {}, lanes: {},
+      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {},
       agents: [
         agent({ id: 'run', startedAt: 1 }),
         agent({ id: 'done', status: 'completed', endedAt: 5 }),
@@ -420,6 +420,7 @@ describe('messaging an agent', () => {
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
     await $.session.send({ to: 'lead', text: 'Ready to merge?', agentId: 'a1' })
+    await clock.advance(100) // REDhelm reads whether it is a question
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect((await ui.find({ key: 'sel-a1' }))?.text).toBe('Docs')
     expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeDefined()
@@ -434,7 +435,7 @@ describe('messaging an agent', () => {
 })
 
 describe('what REDhelm chooses to show', () => {
-  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, handles: {}, lanes: {} }
+  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {} }
 
   test("only this session's workflows, or ones an agent here is changing; finished runs stay quiet", async () => {
     const ws = (dir: string, extra: object) => ({ dir, name: dir.split('/').pop()!, ...extra })
@@ -489,6 +490,7 @@ describe('your draft is never sent to an agent', () => {
     await $.agent.spawn({ prompt: 'x', description: 'Choose colors for the settings page', subagentType: 'general-purpose', name: 'asker' })
     await $.tool.call({ tool: 'Edit', file_path: 'src/Button.tsx', old_string: 'a', new_string: 'b', agentId: 'a1' })
     await $.session.send({ to: 'lead', text: 'Should I use blue or green for the save button?', agentId: 'a1' })
+    await clock.advance(100) // REDhelm reads whether it is a question
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Choose colors for the settings page/ })).toBeDefined()
@@ -581,6 +583,7 @@ describe('agents Claude Code no longer lists', () => {
     await clock.advance(3_000) // REDhelm reads the list
     await $.session.send({ to: 'lead', text: 'Blue or green for the save button?', agentId: 'a1' })
     await $.session.send({ to: 'lead', text: 'Which test runner?', agentId: 'a2' })
+    await clock.advance(100) // REDhelm reads whether it is a question
     let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: /2 needs you/ })).toBeDefined()
     await ui.unmount()
@@ -596,24 +599,41 @@ describe('agents Claude Code no longer lists', () => {
     await ui.unmount()
   })
 
-  test('a message from an agent that is gone stops asking for you; one still listed keeps asking', async ($: any, on: any) => {
+  test("an ended agent's question stays a while, then goes; Dismiss clears it sooner", async ($: any, on: any) => {
     let listed: any[] = [{ id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }]
     on('agent.list', () => ({ value: listed }))
     on('session.send', () => ({ isDelivered: true }))
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
-    await $.session.send({ to: 'lead', text: 'The schema diff is written', agentId: 'a1' })
-    listed = [{ ...listed[0], status: 'completed' }] // finished, still listed: a reply can still reach it
-    await clock.advance(3_000)
+    await $.session.send({ to: 'lead', text: 'The schema diff is written. Should I forward it?', agentId: 'a1' })
+    await clock.advance(100) // REDhelm reads whether it is a question
+    listed = [] // finished and dropped from the list: a reply still resumes it
+    await clock.advance(60_000)
     let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
+    expect(await ui.find({ key: 'dismiss-a1' })).toBeDefined() // ended: Dismiss where Stop was
+    expect(await ui.find({ key: 'stop-a1' })).toBeUndefined()
     await ui.unmount()
-    listed = [] // retired: nothing can reach it now
-    await clock.advance(60_000)
+    await clock.advance(30 * 60_000) // long after it ended, the question has gone stale
     ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /1 finished/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('Dismiss puts away the question of an agent that has ended', async ($: any, on: any) => {
+    let listed: any[] = [{ id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }]
+    on('agent.list', () => ({ value: listed }))
+    on('session.send', () => ({ isDelivered: true }))
+    await engine(on, true)($)
+    await $.session.send({ to: 'lead', text: 'Should I forward the diff?', agentId: 'a1' })
+    await clock.advance(100)
+    listed = [{ ...listed[0], status: 'completed' }]
+    await clock.advance(3_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'dismiss-a1' })
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
     await ui.unmount()
   })
 })
@@ -780,3 +800,106 @@ describe('a reply abandoned by hand', () => {
     await ui.unmount()
   })
 })
+
+describe('what an agent sends you', () => {
+  const docs = { id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }
+
+  test('a report is not a question: no "Asks you", and it shows as what the agent last said', async ($: any, on: any) => {
+    on('agent.list', () => ({ value: [docs] }))
+    on('session.send', () => ({ isDelivered: true }))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    await $.session.send({ to: 'lead', text: 'The schema diff is written to docs/schema.md', agentId: 'a1' })
+    await clock.advance(100)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
+    const sheet = await openSheet($, ui, 'a1')
+    expect(await sheet.find({ type: 'Text', text: /schema diff is written/ })).toBeDefined()
+    expect(await sheet.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
+    await sheet.unmount()
+    await ui.unmount()
+  })
+
+  test('a request with no question mark still asks you, when the model reads it as one', async ($: any, on: any) => {
+    on('agent.list', () => ({ value: [docs] }))
+    on('session.send', () => ({ isDelivered: true }))
+    on('model.classify', (_$: any, e: any) => ({ value: /approve/i.test(e.text) ? e.labels[0] : e.labels[1] }))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    await $.session.send({ to: 'lead', text: 'Approve the migration before I run it', agentId: 'a1' })
+    await clock.advance(100)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('without the model, a question mark or a plain request still counts; a URL query does not', () => {
+    expect(looksLikeQuestion('Should I use blue or green?')).toBe(true)
+    expect(looksLikeQuestion('Let me know which runner to use')).toBe(true)
+    expect(looksLikeQuestion('Waiting on your approval to merge')).toBe(true)
+    expect(looksLikeQuestion('Done: see https://example.com/pr?id=4 for the diff')).toBe(false)
+    expect(looksLikeQuestion('Tests pass. `a?.b` is now guarded.')).toBe(false)
+    expect(looksLikeQuestion('P12 schema diff is written, for forwarding to P13')).toBe(false)
+  })
+})
+
+describe('a newer REDhelm', () => {
+  const installed = (id: string, version: string) => ({ value: { exitCode: 0, stdout: JSON.stringify([{ id, version, enabled: true }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  const published = (version: string) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ name: 'redhelm', version }) } })
+
+  test('is offered in one quiet line, and Update runs the plugin update', async ($: any, on: any) => {
+    const ran: string[] = []
+    on('process.run', (_$: any, e: any) => (ran.push(e.argv.join(' ')), e.argv.includes('list') ? installed('redhelm@redhelm', '0.4.5') : installed('', '')))
+    on('http.fetch', () => published('0.5.0'))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /0\.5\.0 is out/ })).toBeDefined()
+    await ui.press({ key: 'update' })
+    await clock.advance(100)
+    expect(ran).toContain('claude plugin update redhelm@redhelm')
+    expect(await ui.find({ type: 'Text', text: /\/reload-plugins/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('/redhelm update does the same from the keyboard', async ($: any, on: any) => {
+    const ran: string[] = []
+    on('process.run', (_$: any, e: any) => (ran.push(e.argv.join(' ')), installed('redhelm@redhelm', '0.4.5')))
+    on('http.fetch', () => published('0.5.0'))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    const r = await $.command.run({ command: 'redhelm', args: 'update', origin: { kind: 'person' }, presentation: {} } as any)
+    expect(r.text).toMatch(/0\.5\.0/)
+    expect(ran).toContain('claude plugin update redhelm@redhelm')
+  })
+
+  test('says nothing when REDhelm is up to date', async ($: any, on: any) => {
+    on('process.run', () => installed('redhelm@redhelm', '0.4.5'))
+    on('http.fetch', () => published('0.4.5'))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'update' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('says nothing when REDhelm runs from a local folder, which is its own source', async ($: any, on: any) => {
+    on('process.run', () => installed('redhelm@inline', '0.4.5'))
+    on('http.fetch', () => published('0.5.0'))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'update' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('versions compare by number, not by text', () => {
+    expect(isNewer('0.10.0', '0.9.9')).toBe(true)
+    expect(isNewer('0.4.5', '0.4.5')).toBe(false)
+    expect(isNewer('0.4.4', '0.4.5')).toBe(false)
+    expect(isNewer('garbage', '0.4.5')).toBe(false)
+  })
+})
+

@@ -1,7 +1,7 @@
 import type { Elements } from 'claude-code'
 
-import type { Agent, Guard, Message, Note, SetupItem, Workspace } from '../types'
-import { capital, doing, excerpt, grouped, isStale, kilo, minutes, modelWords, overlaps, short } from './model'
+import type { Agent, Guard, Message, Note, Release, SetupItem, Workspace } from '../types'
+import { capital, doing, excerpt, grouped, isStale, kilo, looksLikeQuestion, minutes, modelWords, overlaps, short } from './model'
 
 /**
  * REDhelm looks like an app, not a log: agents sit on cards with a colored initial, what needs
@@ -19,12 +19,15 @@ export type Actions = {
   /** Leaves the reply: the prompt gets back what you were writing to Claude. */
   cancelCompose: () => void
   stop: (id: string) => void
-  dismiss: (messageId: string) => void
+  /** Puts away what an agent asked you, unanswered. */
+  dismiss: (agentId: string) => void
   open: () => void
   toggleDone: () => void
   toggleBrief: () => void
   applySetup: () => void
   skipSetup: () => void
+  /** Installs the newer REDhelm through Claude Code's plugin update. */
+  update: () => void
 }
 
 export type View = {
@@ -40,6 +43,8 @@ export type View = {
   setup: SetupItem[]
   showDone: boolean
   aside: boolean
+  /** A newer REDhelm, when one is published. */
+  release: Release | null
   handles: Record<string, string>
   root: string
   /** 'light' or 'dark', from the person's Claude Code theme. */
@@ -72,7 +77,8 @@ export const label = (a: Agent, lanes: Record<string, string>) =>
 /** Who needs you next: agents asking you something, then live ones by start, then the most recently finished. */
 export function rack(v: View): Strip[] {
   const strips = v.agents.map(agent => {
-    const messages = v.inbox.filter(m => m.agentId === agent.id)
+    // Only a question asks for you; a report is what the agent last said.
+    const messages = v.inbox.filter(m => m.agentId === agent.id && (m.ask ?? looksLikeQuestion(m.text)))
     return { agent, messages, cocked: messages.length > 0 }
   })
   const rank = (s: Strip) => (s.cocked ? 0 : LIVE.has(s.agent.status) ? 1 : 2)
@@ -111,7 +117,7 @@ function Avatar({ els, a, v }: { els: Els; a: Agent; v: View }) {
 
 function Badge({ els, text, color }: { els: Els; text: string; color: string }) {
   const { Text } = els
-  return <Text bold color="inverseText" backgroundColor={color}> {text} </Text>
+  return <Text bold color="inverseText" backgroundColor={color} wrap="truncate-end"> {text} </Text>
 }
 
 /** A filled button: the primary one in REDhelm red, the rest quiet. */
@@ -119,7 +125,7 @@ function Chip({ els, v, k, text, primary, onPress }: { els: Els; v: View; k: str
   const { Box, Button } = els
   const t = tone(v)
   return (
-    <Box backgroundColor={primary ? t.primary : t.chip} paddingX={2}>
+    <Box backgroundColor={primary ? t.primary : t.chip} paddingX={2} flexShrink={0}>
       <Button key={k} plain label={text} hover={{ bold: true, backgroundColor: primary ? t.primaryHover : t.chipHover, scope: k }} onPress={onPress} />
     </Box>
   )
@@ -180,10 +186,12 @@ function AgentButtons({ els, s, v, act, primary }: { els: Els; s: Strip; v: View
   const { Box } = els
   const a = s.agent
   if (v.composing === a.id) return <els.Text color="warning">↓ type below</els.Text>
+  // In a narrow sidebar a button moves to the next line rather than breaking its label.
   return (
-    <Box gap={1}>
+    <Box gap={1} flexWrap="wrap">
       <Chip els={els} v={v} k={`compose-${a.id}`} text={primary} primary onPress={() => act.compose(a.id)} />
       {LIVE.has(a.status) && <Chip els={els} v={v} k={`stop-${a.id}`} text="Stop" onPress={() => act.stop(a.id)} />}
+      {!LIVE.has(a.status) && s.cocked && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" onPress={() => act.dismiss(a.id)} />}
       {v.inspecting !== a.id && <Chip els={els} v={v} k={`more-${a.id}`} text="Details" onPress={() => act.inspect(a.id)} />}
     </Box>
   )
@@ -198,11 +206,14 @@ function NeedsCard({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actio
   const task = a.description && a.description.toLowerCase() !== name.toLowerCase() ? a.description : undefined
   return (
     <Card els={els} v={v}>
-      <Box justifyContent="space-between" gap={2}>
-        <Box gap={1} flexShrink={0}>
-          <Avatar els={els} a={a} v={v} />
-          <Button key={`sel-${a.id}`} plain label={name} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
-          <Badge els={els} text="Asks you" color="warning" />
+      {/* Narrow: the name wraps but keeps a few letters, and the time moves to the next line. */}
+      <Box justifyContent="space-between" columnGap={2} flexWrap="wrap">
+        <Box columnGap={1} flexShrink={1} flexWrap="wrap">
+          <Box flexShrink={0}><Avatar els={els} a={a} v={v} /></Box>
+          <Box flexShrink={1} minWidth={8}>
+            <Button key={`sel-${a.id}`} plain label={name} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
+          </Box>
+          <Box flexShrink={0}><Badge els={els} text="Asks you" color="warning" /></Box>
         </Box>
         <Text color="subtle" wrap="truncate-end">{ago(v.now - ask.at)}</Text>
       </Box>
@@ -362,8 +373,17 @@ function Workflows({ els, v }: { els: Els; v: View }) {
 // The agent sheet: everything about one agent, opened from any row
 
 /** One row of the sheet: a quiet label column and its value. */
-function Field({ els, name, children }: { els: Els; name: string; children: any }) {
+/** A labelled part of the sheet; `stacked` puts the label above, for a narrow sidebar. */
+function Field({ els, name, stacked, children }: { els: Els; name: string; stacked?: boolean; children: any }) {
   const { Box, Text } = els
+  if (stacked) {
+    return (
+      <Box flexDirection="column">
+        <Text color="subtle">{name}</Text>
+        {children}
+      </Box>
+    )
+  }
   return (
     <Box gap={2}>
       <Box width={13} flexShrink={0}><Text color="subtle">{name}</Text></Box>
@@ -379,6 +399,7 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
   const s = rack(v).find(x => x.agent.id === a.id)!
   const ask = s.messages.at(-1)
   const live = LIVE.has(a.status)
+  const stacked = columns < 50
   const brief = a.brief?.trim()
   const long = !!brief && brief.length > 280
   return (
@@ -407,14 +428,14 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
 
       <Box flexDirection="column" gap={1}>
         {brief && (
-          <Field els={els} name="Asked to">
+          <Field els={els} stacked={stacked} name="Asked to">
             <Text wrap="wrap">{v.briefOpen || !long ? brief : `${brief.slice(0, 280).trimEnd()}…`}</Text>
             {long && <Button key="brief-more" plain dimColor label={v.briefOpen ? 'Less' : 'More'} onPress={act.toggleBrief} />}
           </Field>
         )}
-        {!brief && a.description && <Field els={els} name="Working on"><Text wrap="wrap">{a.description}</Text></Field>}
+        {!brief && a.description && <Field els={els} stacked={stacked} name="Working on"><Text wrap="wrap">{a.description}</Text></Field>}
         {a.steps?.length > 0 && (
-          <Field els={els} name="Recent steps">
+          <Field els={els} stacked={stacked} name="Recent steps">
             {grouped(a.steps).slice(0, 6).map((st, i) => (
               <Box key={`st-${i}`} justifyContent="space-between" gap={2}>
                 <Text wrap="truncate-end">{st.text}{st.count > 1 ? <Text color="subtle"> ×{st.count}</Text> : ''}</Text>
@@ -427,12 +448,29 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
           <Text color="subtle" wrap="wrap">This agent started before REDhelm, and Claude Code has no record of its work to show.</Text>
         )}
         {/* Once it has finished, its last words say it; thinking would only repeat them. */}
-        {live && a.thinking && <Field els={els} name="Thinking"><Text color="subtle" wrap="wrap">{a.thinking}</Text></Field>}
-        <Field els={els} name="Changed">
+        {live && a.thinking && <Field els={els} stacked={stacked} name="Thinking"><Text color="subtle" wrap="wrap">{a.thinking}</Text></Field>}
+        <Field els={els} stacked={stacked} name="Changed">
           <Text wrap="truncate-end">{a.files.length ? a.files.slice(-4).map(f => f.split('/').pop()).join(', ') + (a.files.length > 4 ? ` and ${a.files.length - 4} more` : '') : 'nothing yet'}</Text>
         </Field>
-        {a.model && <Field els={els} name="Model"><Text>{modelWords(a.model, a.effort)}{a.context ? ` · ${kilo(a.context)} tokens of context` : ''}</Text></Field>}
-        {(a.answer || (!live && a.thinking)) && <Field els={els} name="Last said"><Text color="subtle" wrap="wrap">{a.answer || a.thinking}</Text></Field>}
+        {a.model && <Field els={els} stacked={stacked} name="Model"><Text>{modelWords(a.model, a.effort)}{a.context ? ` · ${kilo(a.context)} tokens of context` : ''}</Text></Field>}
+        {(a.answer || (!live && a.thinking)) && <Field els={els} stacked={stacked} name="Last said"><Text color="subtle" wrap="wrap">{a.answer || a.thinking}</Text></Field>}
+      </Box>
+    </Box>
+  )
+}
+
+/** A newer REDhelm: one quiet line, never a pop-up. */
+function Update({ els, v, act }: { els: Els; v: View; act: Actions }) {
+  const { Box, Text, Button } = els
+  const r = v.release
+  if (!r) return null
+  if (r.state === 'updating') return <Text color="subtle">Updating REDhelm to {r.latest}…</Text>
+  if (r.state === 'updated') return <Text color="subtle" wrap="truncate-end">REDhelm {r.latest} installed · /reload-plugins to load it</Text>
+  return (
+    <Box gap={1}>
+      <Text color="subtle" wrap="truncate-end">{r.state === 'failed' ? 'Update failed' : `REDhelm ${r.latest} is out`}</Text>
+      <Box flexShrink={0}>
+        <Button key="update" plain dimColor label={r.state === 'failed' ? 'Retry' : 'Update'} hover={{ bold: true, scope: 'update' }} onPress={act.update} />
       </Box>
     </Box>
   )
@@ -470,6 +508,7 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       <Finished els={els} v={v} act={act} strips={done} />
       <Overlaps els={els} v={v} />
       <Workflows els={els} v={v} />
+      <Update els={els} v={v} act={act} />
     </Box>
   )
 }
@@ -514,6 +553,7 @@ function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View
         <Box flexShrink={0} gap={2}>
           <Brand els={els} />
           <Text color="subtle">{counts(v)}</Text>
+          <Update els={els} v={v} act={act} />
         </Box>
         {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <ModelNotice els={els} v={v} />}
       </Box>
