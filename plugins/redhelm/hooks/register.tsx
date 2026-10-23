@@ -178,6 +178,11 @@ async function sync($: $) {
     const was = current[id]
     if (was && LIVE.has(was.status) && ENDED.has(a.status) && (listed.has(id) || was.answer)) await announce($, id, a.status === 'failed', was.answer)
   }
+  // A message from an agent Claude Code has retired can no longer be answered: it stops asking for you.
+  // (Its words stay in the agent's notes.) One still listed, even finished, can still take a reply.
+  const answerable = (id: string) => listed.has(id) || LIVE.has(merged[id]?.status as Agent['status'])
+  const asks = await read($, inbox)
+  if (asks.some(m => !answerable(m.agentId))) await update($, inbox, list => list.filter(m => answerable(m.agentId)))
   if (Object.values(merged).some(a => LIVE.has(a.status))) await update($, now, () => at)
 }
 

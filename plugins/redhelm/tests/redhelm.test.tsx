@@ -571,6 +571,27 @@ describe('agents Claude Code no longer lists', () => {
     expect(await ui.find({ type: 'Text', text: /working/ })).toBeUndefined()
     await ui.unmount()
   })
+
+  test('a message from an agent that is gone stops asking for you; one still listed keeps asking', async ($: any, on: any) => {
+    let listed: any[] = [{ id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }]
+    on('agent.list', () => ({ value: listed }))
+    on('session.send', () => ({ isDelivered: true }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+    await $.session.send({ to: 'lead', text: 'The schema diff is written', agentId: 'a1' })
+    listed = [{ ...listed[0], status: 'completed' }] // finished, still listed: a reply can still reach it
+    await clock.advance(3_000)
+    let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
+    await ui.unmount()
+    listed = [] // retired: nothing can reach it now
+    await clock.advance(60_000)
+    ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /1 finished/ })).toBeDefined()
+    await ui.unmount()
+  })
 })
 
 
