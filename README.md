@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, two are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.7.0).** Covered by tests and checked with real agents:
+> **Status: early release (0.7.1).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -26,6 +26,10 @@ work is landing, and which one needs you — and know which model is actually an
   place on the activity line. Rows sit on plates of the background's colour, so text
   never lands on the pattern. The **Background** setting also offers a still grid, drifting
   ASCII clouds (the way an ASCII video renderer draws), a slow red glow, or none.
+  REDhelm follows Claude Code's theme (`/theme`): black with a grey grid in a dark theme,
+  white with a light grey one in a light theme; with `auto`, it follows your desktop's
+  appearance. If your terminal is light but Claude Code's theme is dark, Claude Code draws
+  dark colours and so does REDhelm: set `/theme` to light to match.
 - **States at a glance.** `▶` working · `▷` quiet (no action for 15 minutes) · `◆`
   waiting on another agent or on work it started · `⚑` asks you · `✓` finished · `✕`
   failed or stopped. The header counts them: `⚑ 1  ▶ 2  ✓ 1`.

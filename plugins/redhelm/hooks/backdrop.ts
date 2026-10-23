@@ -14,7 +14,7 @@ export type Palette = { bg: number; lattice: number; dim: number; bright: number
 
 export const PALETTES: Record<'dark' | 'light', Palette> = {
   dark: { bg: 0x000000, lattice: 0x303030, dim: 0x181818, bright: 0x4a4a4a, ember: 0xc0262d },
-  light: { bg: 0xfafafa, lattice: 0xd2d2d8, dim: 0xe8e8ec, bright: 0xa8a8b0, ember: 0xe0525a },
+  light: { bg: 0xfefefe, lattice: 0xd2d2d8, dim: 0xe8e8ec, bright: 0xa8a8b0, ember: 0xe0525a },
 }
 
 /** How long a ring travels before it is gone. */

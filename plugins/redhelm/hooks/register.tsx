@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types'
-import { DEFAULTS, LINES, activity, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
+import { DEFAULTS, LINES, activity, appearance, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
@@ -340,10 +340,23 @@ async function checkStale($: $) {
   await status($)
 }
 
+/** The system's appearance, read at most once a minute, for Claude Code's `auto` theme (whose own reading plugins cannot see). */
+let system: { at: number; theme: 'light' | 'dark' } | undefined
+async function systemTheme($: $): Promise<'light' | 'dark'> {
+  const at = await $.clock.now()
+  if (system && at - system.at < 60_000) return system.theme
+  const ask = async (argv: string[]) => $.process.run(argv, { timeoutMs: 3000 }).catch(() => undefined)
+  system = { at, theme: await appearance(ask) }
+  return system.theme
+}
+
 /** Re-reads workspaces and the stale check; writes only on change, so idle polling never redraws. */
 async function refresh($: $) {
   const t = (await $.settings.read()).theme
-  theme = typeof t === 'string' && t.includes('light') ? 'light' : 'dark'
+  const was = theme
+  theme = typeof t === 'string' && t.includes('light') ? 'light' : t === 'auto' ? await systemTheme($) : 'dark'
+  // The theme is no state REDhelm keeps: a change redraws it, background and all.
+  if (theme !== was) $.ui.invalidate('ui.render')
   const list = await workspaces(await io($))
   if (!same((await $.state.get(WORKSPACES)).value, list)) await $.state.set(WORKSPACES, list)
   await checkStale($)

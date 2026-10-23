@@ -4,7 +4,7 @@ import type { Agent } from '../types'
 
 /** The test runtime has timers; the hooks environment's declarations leave them out. */
 declare const setTimeout: (fn: () => void, ms: number) => unknown
-import { grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstAsk, plainHeadline, stateOf,
+import { appearance, grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstAsk, plainHeadline, stateOf,
   DEFAULTS, activity, handleOf, handles, settings, foldLanes, foldStatusBoard, isStale, kindOf, overlaps, parseRun, parseStandards, phase, remember, short, staleTarget,
 } from '../hooks/model'
 import { workspaces, type Io } from '../hooks/sources'
@@ -1085,6 +1085,20 @@ describe('the backdrop', () => {
     expect((await sheet.findAll({ type: 'Box' })).some((b: any) => b.props.backgroundColor === '#000000')).toBe(true)
     await sheet.unmount()
     await ui.unmount()
+  })
+
+  test("Claude Code's auto theme follows the desktop: macOS's dark key, GNOME's colour scheme, else dark", async () => {
+    const answers = (map: Record<string, { exitCode: number; stdout: string } | undefined>) => async (argv: string[]) => map[argv[0]!]
+    expect(await appearance(answers({ defaults: { exitCode: 0, stdout: 'Dark\n' } }))).toBe('dark')
+    expect(await appearance(answers({ defaults: { exitCode: 1, stdout: '' } }))).toBe('light') // macOS, no dark key
+    expect(await appearance(answers({ gsettings: { exitCode: 0, stdout: "'prefer-light'" } }))).toBe('light')
+    expect(await appearance(answers({ gsettings: { exitCode: 0, stdout: "'prefer-dark'" } }))).toBe('dark')
+    expect(await appearance(answers({}))).toBe('dark')
+  })
+
+  test('the light theme draws on near-white, which Claude Code paints (it leaves a Box of pure #ffffff unpainted)', () => {
+    expect(PALETTES.light.bg).not.toBe(0xffffff)
+    expect(PALETTES.light.bg).toBeGreaterThan(0xf8f8f8)
   })
 
   test('background: none leaves the pane as it was', { options: { backdrop: 'none' } } as any, async ($: any, on: any) => {

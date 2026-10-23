@@ -32,6 +32,19 @@ export const settings = (o: Record<string, unknown> = {}): Settings => ({
   backdrop: pick(o.backdrop, ['ripples', 'lattice', 'field', 'ember', 'none'] as const, 'ripples'),
 })
 
+/**
+ * The desktop's light or dark appearance. macOS stores a key only when dark (absent, `defaults`
+ * exits 1: light); GNOME says 'prefer-dark', 'prefer-light' or 'default'. Unknown: dark.
+ */
+export async function appearance(ask: (argv: string[]) => Promise<{ exitCode: number; stdout: string } | undefined>): Promise<'light' | 'dark'> {
+  const mac = await ask(['defaults', 'read', '-g', 'AppleInterfaceStyle'])
+  if (mac?.exitCode === 0) return /dark/i.test(mac.stdout) ? 'dark' : 'light'
+  if (mac?.exitCode === 1) return 'light'
+  const gnome = await ask(['gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme'])
+  if (gnome?.exitCode === 0) return /dark/i.test(gnome.stdout) ? 'dark' : 'light'
+  return 'dark'
+}
+
 // Models: the same rules as ~/.claude/model-guard/mg_common.py
 
 export const base = (model = '') => (model.split('[')[0] ?? '').replace(/-\d{8}$/, '')
