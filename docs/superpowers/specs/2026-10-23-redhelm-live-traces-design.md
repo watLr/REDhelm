@@ -204,3 +204,8 @@ Found on the live render and kept:
   below 30, chips use one column of padding.
 - **Surface choice.** Element tables name every element on every surface (a missing one
   draws nothing), so Raster vs Svg is chosen by `e.surface`.
+- **Colour (0.6.2, asked for after 0.6.1).** Each agent has its own hue (no orange: that is
+  a question's amber): a stripe down its row, its trace as a comet tail (grey at the oldest
+  bar to full hue at the newest), and a spectrum line under the header, each working
+  agent's share of the last minute's tool calls. The amber `Asks you` pill returns on
+  question cards (34 columns and up) and in the bar.

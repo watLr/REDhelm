@@ -548,7 +548,7 @@ async function tick($: $) {
   await pace($)
   if (!visible) return
   const at = await $.clock.now()
-  const face = clockFace(Object.values(await read($, agents)), await read($, inbox), at)
+  const face = clockFace(Object.values(await read($, agents)), await read($, inbox), at, Object.fromEntries(traces))
   if (!was || face !== shownFace) {
     shownFace = face
     await update($, now, () => at)

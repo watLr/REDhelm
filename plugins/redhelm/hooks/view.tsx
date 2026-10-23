@@ -2,7 +2,7 @@ import type { Elements } from 'claude-code'
 
 import type { Agent, Guard, Message, Note, Release, SetupItem, Workspace } from '../types'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
-import { bars, buckets, isMoving, rasterCells, svgTrace } from './trace'
+import { bars, buckets, isMoving, rasterCells, spectrum, svgTrace, tail } from './trace'
 
 /**
  * Every agent is a live signal. Each row carries a trace of its tool calls: the trace moves while
@@ -38,7 +38,7 @@ export type Actions = {
 }
 
 /** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colours moving and flat, the cells it holds. */
-export type TraceSpec = { agentId: string; cells: number; rows: number; moving: number; quiet: number; sent?: string }
+export type TraceSpec = { agentId: string; cells: number; rows: number; moving: number[]; quiet: number; sent?: string }
 
 export type View = {
   now: number
@@ -73,11 +73,18 @@ export type View = {
 // Tokens: surfaces follow the theme; meaning colours are the theme's own keys
 
 const PALETTE = {
-  dark: { card: '#1c1c21', chip: '#2c2c33', chipHover: '#3a3a42', primary: '#d6363c', primaryHover: '#e5484d', rule: '#2c2c33', hover: '#232329', trace: 0x9a9aa6, quiet: 0x4c4c55, svg: '#9a9aa6', svgQuiet: '#4c4c55' },
-  light: { card: '#f2f2f5', chip: '#e2e2e7', chipHover: '#d4d4db', primary: '#fbd5d6', primaryHover: '#f8c1c3', rule: '#e2e2e7', hover: '#ececf0', trace: 0x6e6e7a, quiet: 0xbdbdc6, svg: '#6e6e7a', svgQuiet: '#bdbdc6' },
+  dark: { card: '#1c1c21', chip: '#2c2c33', chipHover: '#3a3a42', primary: '#d6363c', primaryHover: '#e5484d', rule: '#2c2c33', hover: '#232329', quiet: 0x4c4c55, svgQuiet: '#4c4c55' },
+  light: { card: '#f2f2f5', chip: '#e2e2e7', chipHover: '#d4d4db', primary: '#fbd5d6', primaryHover: '#f8c1c3', rule: '#e2e2e7', hover: '#ececf0', quiet: 0xbdbdc6, svgQuiet: '#bdbdc6' },
 } as const
 
 const tone = (v: View) => PALETTE[v.theme] ?? PALETTE.dark
+
+/** Each agent's own colour, the same everywhere it appears: its stripe and its trace. No orange: that is a question's amber. */
+const HUES = ['#4f8ff7', '#a777f2', '#22b8a6', '#e8659a', '#8cc152', '#5bc0eb']
+
+export const hue = (id: string) => HUES[[...id].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7) % HUES.length]!
+
+const rgb = (hex: string) => parseInt(hex.slice(1), 16)
 
 /** One glyph per state, the same in every row, card, sheet and count. */
 const GLYPH: Record<State, { glyph: string; color?: string }> = {
@@ -127,9 +134,11 @@ function when(a: Agent, v: View) {
  * Every time REDhelm shows, as one string: when it changes, a redraw is due. An agent past its first
  * minute changes it once a minute, so its trace moves by repaints alone, with no redraw between.
  */
-export function clockFace(agents: Agent[], inbox: Message[], now: number) {
+export function clockFace(agents: Agent[], inbox: Message[], now: number, traces: Record<string, readonly number[]> = {}) {
   const v = { now } as View
-  return [...agents.map(a => `${a.id}:${when(a, v)}`), ...inbox.map(m => `${m.id}:${age(now - m.at)}`)].join(' ')
+  const live = new Set(agents.filter(a => LIVE.has(a.status)).map(a => a.id))
+  const busy = spectrum(Object.fromEntries(Object.entries(traces).filter(([id]) => live.has(id))), now, 40).map(p => `${p.id}=${p.cells}`)
+  return [...agents.map(a => `${a.id}:${when(a, v)}`), ...inbox.map(m => `${m.id}:${age(now - m.at)}`), ...busy].join(' ')
 }
 
 // Primitives
@@ -184,12 +193,13 @@ function Trace({ els, v, a, k, cells, rows = 1 }: { els: Els; v: View; a: Agent;
   const counts = buckets(times, v.at, cells)
   const moving = isMoving(times, v.at)
   if (Raster && v.motion) {
-    const drawn = rasterCells(bars(counts, rows), moving ? t.trace : t.quiet)
-    v.mount?.(k, { agentId: a.id, cells, rows, moving: t.trace, quiet: t.quiet, sent: drawn })
+    const comet = tail(rgb(hue(a.id)), t.quiet, cells)
+    const drawn = rasterCells(bars(counts, rows), moving ? comet : t.quiet)
+    v.mount?.(k, { agentId: a.id, cells, rows, moving: comet, quiet: t.quiet, sent: drawn })
     return <Box width={cells} flexShrink={0}><Raster key={k} columns={cells} rows={rows} cells={drawn} /></Box>
   }
   if (Svg) {
-    return <Box flexShrink={0}><Svg source={svgTrace(counts, cells * 8, rows * 14, rows, moving ? t.svg : t.svgQuiet)} alt={moving ? 'Working' : 'Quiet'} width={cells * 8} height={rows * 14} /></Box>
+    return <Box flexShrink={0}><Svg source={svgTrace(counts, cells * 8, rows * 14, rows, moving ? hue(a.id) : t.svgQuiet, t.svgQuiet)} alt={moving ? 'Working' : 'Quiet'} width={cells * 8} height={rows * 14} /></Box>
   }
   return (
     <Box width={cells} flexShrink={0} flexDirection="column">
@@ -216,6 +226,15 @@ function HoverActions({ els, v, a, act, right }: { els: Els; v: View; a: Agent; 
 }
 
 // The list
+
+/** Under the header: each working agent's share of the last minute's tool calls, in its own colour. */
+function Spectrum({ els, v, width }: { els: Els; v: View; width: number }) {
+  const { Text } = els
+  const live = new Set(v.agents.filter(a => LIVE.has(a.status)).map(a => a.id))
+  const parts = spectrum(Object.fromEntries(Object.entries(v.traces).filter(([id]) => live.has(id))), v.at, width)
+  if (!parts.length) return null
+  return <Text>{parts.map(p => <Text key={`sp-${p.id}`} color={hue(p.id)}>{'━'.repeat(p.cells)}</Text>)}</Text>
+}
 
 function Header({ els, v }: { els: Els; v: View }) {
   const { Box, Text } = els
@@ -247,12 +266,14 @@ function Row({ els, s, v, act, columns, cells }: { els: Els; s: Strip; v: View; 
   const ended = !LIVE.has(a.status)
   const older = isStale(a.model, v.guard.stale ?? v.guard.model)
   const scope = `row-${a.id}`
-  // edge 1, glyph 2, trace and its gap, time 6, gap and › 2
-  const room = columns - 1 - 2 - (cells + 1) - 6 - 2 - (older ? 2 : 0)
+  // stripe and its gap 2, glyph 2, trace and its gap, time 6, gap and › 2
+  const room = columns - 2 - 2 - (cells + 1) - 6 - 2 - (older ? 2 : 0)
   return (
-    <Box key={scope} flexDirection="column" position="relative" hover={{ backgroundColor: tone(v).hover, scope }}>
+    <Box key={scope} position="relative" hover={{ backgroundColor: tone(v).hover, scope }}>
+      {/* Its colour, down both lines: how you tell agents apart at a glance. Finished agents go grey. */}
+      <Box width={1} flexShrink={0} backgroundColor={ended ? tone(v).chip : hue(a.id)} />
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingLeft={1}>
       <Box>
-        <Box width={1} flexShrink={0} />
         <Glyph els={els} state={stateOf(a, v.now)} />
         <Box flexGrow={1} flexShrink={1} minWidth={6}>
           <Button key={`sel-${a.id}`} plain dimColor={ended} label={fit(label(a, v.lanes), Math.max(6, room))} hover={{ underline: true, scope }} onPress={() => act.inspect(a.id)} />
@@ -266,8 +287,9 @@ function Row({ els, s, v, act, columns, cells }: { els: Els; s: Strip; v: View; 
           <Button key={`open-${a.id}`} plain dimColor label="›" hover={{ bold: true, scope }} onPress={() => act.inspect(a.id)} />
         </Box>
       </Box>
-      <Box paddingLeft={3} paddingRight={2}>
+      <Box paddingLeft={2} paddingRight={2}>
         <Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text>
+      </Box>
       </Box>
       {!ended && v.composing !== a.id && <HoverActions els={els} v={v} a={a} act={act} right={2} />}
     </Box>
@@ -286,16 +308,20 @@ function QuestionCard({ els, s, v, act, columns }: { els: Els; s: Strip; v: View
   // Narrow: the flag already says it asks; the time alone keeps the name its room.
   const roomy = columns >= 34
   const compact = columns < 30
-  const time = roomy ? `asks · ${age(since)}` : age(since)
+  const time = age(since)
+  const pill = roomy ? ' Asks you ' : ''
   const flash = v.motion && since >= 0 && since < 1500 && Math.floor(since / 250) % 2 === 1
   return (
     <EdgeCard els={els} v={v} k={`ask-${a.id}`} edge={flash ? tone(v).chip : 'warning'}>
       <Box justifyContent="space-between" columnGap={1}>
         <Box flexShrink={1} minWidth={6}>
           <Glyph els={els} state="asks" />
-          <Button key={`sel-${a.id}`} plain label={fit(label(a, v.lanes), columns - 1 - 2 - 2 - time.length - 1)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
+          <Button key={`sel-${a.id}`} plain label={fit(label(a, v.lanes), columns - 1 - 2 - 2 - pill.length - time.length - 2)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
         </Box>
-        <Box flexShrink={0}><Text color="subtle">{time}</Text></Box>
+        <Box flexShrink={0} columnGap={1}>
+          {pill && <Text bold color="inverseText" backgroundColor="warning">{pill}</Text>}
+          <Text color="subtle">{time}</Text>
+        </Box>
       </Box>
       <Box paddingLeft={2}>
         <Text bold wrap="wrap">{ask.title ?? firstAsk(ask.text)}</Text>
@@ -517,6 +543,7 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
       <Box flexDirection="column">
         <Box justifyContent="space-between" columnGap={2}>
           <Box flexShrink={1} minWidth={6}>
+            <Box width={1} flexShrink={0} marginRight={1} backgroundColor={live ? hue(a.id) : tone(v).chip} />
             <Glyph els={els} state={stateOf(a, v.now, !!ask)} />
             <Text bold wrap="truncate-end">{label(a, v.lanes)}</Text>
           </Box>
@@ -619,7 +646,10 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
   const cells = columns < 30 ? 4 : 8
   return (
     <Box flexDirection="column" gap={1} width={columns}>
-      <Header els={els} v={v} />
+      <Box flexDirection="column">
+        <Header els={els} v={v} />
+        <Spectrum els={els} v={v} width={columns} />
+      </Box>
       {classic && <NoClicks els={els} />}
       <Composer els={els} v={v} act={act} />
       <ModelNotice els={els} v={v} />
@@ -646,10 +676,12 @@ function NeedsLine({ els, s, v, act, name }: { els: Els; s: Strip; v: View; act:
   return (
     <Box>
       <Box width={1} flexShrink={0} backgroundColor="warning" />
+      <Box width={1} flexShrink={0} />
       <Glyph els={els} state="asks" />
       <Box width={name} flexShrink={0}>
         <Button key={`sel-${a.id}`} plain label={fit(label(a, v.lanes), name - 1)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
       </Box>
+      <Box flexShrink={0} marginRight={1}><Text bold color="inverseText" backgroundColor="warning"> Asks you </Text></Box>
       <Box flexGrow={1} flexShrink={1}><Text bold wrap="truncate-end">{ask.title ?? firstAsk(ask.text, 160)}</Text></Box>
       <Box flexShrink={0} columnGap={1} marginLeft={2}>
         {v.composing === a.id
@@ -670,6 +702,7 @@ function WideRow({ els, s, v, act, name }: { els: Els; s: Strip; v: View; act: A
   const older = isStale(a.model, v.guard.stale ?? v.guard.model)
   return (
     <Box key={scope} position="relative" hover={{ backgroundColor: tone(v).hover, scope }}>
+      <Box width={1} flexShrink={0} backgroundColor={hue(a.id)} />
       <Box width={1} flexShrink={0} />
       <Glyph els={els} state={stateOf(a, v.now)} />
       <Box width={name} flexShrink={0}>
@@ -706,6 +739,7 @@ function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View
       <Box justifyContent="space-between" gap={3}>
         <Box flexShrink={0} gap={3}>
           <Header els={els} v={v} />
+          <Spectrum els={els} v={v} width={20} />
           <Update els={els} v={v} act={act} />
         </Box>
         {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <WideNotice els={els} v={v} />}

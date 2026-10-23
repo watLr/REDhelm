@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, two are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.6.1).** Covered by tests and checked with real agents:
+> **Status: early release (0.6.2).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -17,6 +17,10 @@ work is landing, and which one needs you — and know which model is actually an
   glyph, its name, a trace of its tool calls over the last half minute, and how long it
   has run. The trace moves while the agent works and flattens when it goes quiet. Under
   the name, a few words on what it is doing.
+- **Each agent has its colour.** A stripe down its row, and its trace drawn as a comet
+  tail: full colour at the newest call, fading to grey into the past. Under REDhelm's
+  name, a thin line in the same colours shows each working agent's share of the last
+  minute's tool calls, so the busiest one is the longest.
 - **States at a glance.** `▶` working · `▷` quiet (no action for 15 minutes) · `◆`
   waiting on another agent or on work it started · `⚑` asks you · `✓` finished · `✕`
   failed or stopped. The header counts them: `⚑ 1  ▶ 2  ✓ 1`.
