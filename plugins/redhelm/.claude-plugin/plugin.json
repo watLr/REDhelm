@@ -1,7 +1,7 @@
 {
   "name": "redhelm",
   "version": "0.7.1",
-  "description": "Live sidebar for your agents: what they do, where their work lands, what needs you, and your workflows.",
+  "description": "A live control panel for your Claude Code agents: activity traces, questions that wait for you, an agent sheet with Message and Stop, and a model guard.",
   "author": {
     "name": "watLr",
     "url": "https://github.com/watLr"

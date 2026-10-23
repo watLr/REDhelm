@@ -1,168 +1,195 @@
+<div align="center">
+
 # REDhelm
 
-A live sidebar for your Claude Code agents. See what every agent is doing, where its
-work is landing, and which one needs you — and know which model is actually answering.
+**A live control panel for your Claude Code agents.**<br>
+See what every agent is doing, answer the ones that need you, and know which model is really answering, without leaving the terminal.
 
-![REDhelm docked beside the conversation: one agent asks a question, two are working](docs/images/redhelm-right.png)
+[![Release](https://img.shields.io/github/v/release/watLr/redhelm?color=d6363c&label=release)](https://github.com/watLr/redhelm/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-555)](LICENSE)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-2.1.289%2B-555)](https://claude.com/claude-code)
 
-> **Status: early release (0.7.1).** Covered by tests and checked with real agents:
-> the agent list and sheet, **Message** and **Stop**, the model guard, settings and
-> workflows. Issues welcome.
+<img src="docs/images/redhelm-right.png" alt="REDhelm docked beside a Claude Code conversation: one agent asks a question, three are working" width="920">
 
-## What it does
-
-<img src="docs/images/redhelm-sheet.png" alt="An agent's sheet: its live trace, task, steps, files, model and last words" width="300" align="right">
-
-- **Every agent is a live signal.** One row per agent, on one aligned grid: a state
-  glyph, its name, a trace of its tool calls over the last half minute, and how long it
-  has run. The trace moves while the agent works and flattens when it goes quiet. Under
-  the name, a few words on what it is doing.
-- **Each agent has its colour.** A stripe down its row, and its trace drawn as a comet
-  tail: full colour at the newest call, fading to grey into the past. Under REDhelm's
-  name, a thin line in the same colours shows each working agent's share of the last
-  minute's tool calls, so the busiest one is the longest.
-- **A live background.** In the sidebar, REDhelm sits on black with a quiet grid of `+`
-  signs. Each tool call sends a ring through the grid in its agent's colour, from its
-  place on the activity line. Rows sit on plates of the background's colour, so text
-  never lands on the pattern. The **Background** setting also offers a still grid, drifting
-  ASCII clouds (the way an ASCII video renderer draws), a slow red glow, or none.
-  REDhelm follows Claude Code's theme (`/theme`): black with a grey grid in a dark theme,
-  white with a light grey one in a light theme; with `auto`, it follows your desktop's
-  appearance. If your terminal is light but Claude Code's theme is dark, Claude Code draws
-  dark colours and so does REDhelm: set `/theme` to light to match.
-- **States at a glance.** `▶` working · `▷` quiet (no action for 15 minutes) · `◆`
-  waiting on another agent or on work it started · `⚑` asks you · `✓` finished · `✕`
-  failed or stopped. The header counts them: `⚑ 1  ▶ 2  ✓ 1`.
-- **Words written for you.** Claude Code's small model (Haiku, low effort) writes each
-  working agent's headline ("Editing setup.md troubleshooting") and each question's
-  short title, the way `/btw` answers a side question. REDhelm's own plain words show
-  until a label arrives, and whenever the model is slow or switched off.
-- **Agent sheet.** Click an agent for its trace over the last minute, its task, latest
-  steps, the files it changed, its model and effort, and its last words. Agents that
-  started before REDhelm are filled in from Claude Code's record of their conversation.
-  In the sidebar the sheet takes the panel's place, with **← Back** to your agents; from
-  the bar above the prompt it opens on its own and closes with Esc.
-- **Message and Stop** appear when you point at a working agent, and sit at the top of
-  its sheet.
-- **Messaging an agent.** Message fills your prompt with `→ name: `; type and press Enter
-  to send it to that agent instead of Claude (you can also type `→ name: message`
-  yourself). What you were typing to Claude is kept and comes back after. Changed your
-  mind? **Cancel** on the "Writing to …" line puts your draft back.
-- **Needs you.** An agent that asks you something gets a card with an amber edge, its
-  question in a line and a **Reply** button; the whole question is in its sheet. Claude
-  Code's small, fast model tells a question from a report (with a plain check of the
-  wording if the model can't be reached); a report is not a question, so it pops up
-  briefly and becomes the agent's last words in its sheet instead. A
-  question clears once you or Claude answer it. From an agent that has ended, it stays
-  30 minutes (a reply still resumes that agent), with **Dismiss** to put it away sooner.
-- **Updates.** When a newer REDhelm is published, a quiet line at the bottom of the
-  panel says so, with **Update**. Nothing pops up. A copy run from a local folder is
-  its own source and is never offered one.
-- **Where work lands.** A warning when two live agents edit the same file.
-- **Workflows.** Picks up lane boards (`docs/aaa/board/lanes.json`), status boards
-  (`.status-board/`), REDStudio (`.redstudio/`) and REDManager (`.redmanager/`) in the
-  project and shows their progress.
-- **Model guard.** If Claude Code switches models on its own, your next prompt and
-  Claude's tools wait until you choose with `/model`. If your saved default moved to a
-  newer version, the session tells you once.
-- **Long-turn notifications.** A desktop notification (macOS, Linux) when a long turn
-  finishes.
+</div>
 
 ## Install
 
-Requires Claude Code with function-hook mods (2.1.289 or newer).
-
-```
+```sh
 claude plugin marketplace add watLr/redhelm
 claude plugin install redhelm@redhelm
 ```
 
-Restart running sessions (`/restart`) to load it.
+Then restart running sessions (`/restart`). REDhelm opens by itself when agents start, or run `/redhelm`.
 
-## Use
+**Needs:** Claude Code 2.1.289 or newer. The sidebar needs the fullscreen layout (`/tui fullscreen`) and a terminal at least 110 columns wide; otherwise REDhelm sits above the prompt.
 
-| Command | |
+## At a glance
+
+<img src="docs/images/redhelm-live.gif" alt="REDhelm live: activity traces grow, rings cross the background, an agent finishes" width="360" align="right">
+
+- **Live agent list.** One aligned row per agent: its state, name, a trace of its tool calls, and how long it has run.
+- **Questions first.** An agent that asks you something gets an amber card with **Reply**, at the top.
+- **Plain words.** A short headline under each agent, written by Claude Code's small model.
+- **One click deep.** Click an agent for its task, steps, files, model and last words.
+- **Message and Stop.** Point at a working agent to message it or stop it.
+- **Model guard.** Holds your prompt if Claude Code switches models on its own.
+- **A live background.** Each tool call sends a ring through the sidebar in its agent's colour.
+- **Light and dark.** Follows Claude Code's theme.
+
+<br clear="right">
+
+## What you see
+
+### Every agent is a live signal
+
+Each agent has its own colour: a stripe down its row, and a trace of its tool calls over the last half minute, brightest at the newest call and fading into the past. The trace moves while the agent works and flattens when it goes quiet. Under REDhelm's name, a thin line in the same colours shows each working agent's share of the last minute's calls, so the busiest one is the longest.
+
+| Glyph | State |
+|:---:|---|
+| `▶` | working |
+| `▷` | quiet: no action for 15 minutes |
+| `◆` | waiting on another agent, or on work it started |
+| `⚑` | asks you something |
+| `✓` | finished |
+| `✕` | failed or stopped |
+
+The header counts them (`⚑ 1  ▶ 3  ✓ 2`). Finished agents fold into one line until you want them.
+
+### Questions that wait for you
+
+An agent that asks you something gets an amber-edged card with its question in a line, **Reply**, and **Details**. Reply fills your prompt with `→ name: `; type and press Enter, and it goes to that agent instead of Claude. Anything you were typing to Claude is kept and comes back after.
+
+REDhelm tells a question from a report: Claude Code's small model reads each message (with a plain check of the wording if it can't be reached). A report becomes the agent's last words instead of asking for you. A question clears once you or Claude answer it; one from an agent that has ended stays 30 minutes (a reply still reaches it), with **Dismiss** to put it away sooner.
+
+### Everything about one agent
+
+<img src="docs/images/redhelm-sheet.png" alt="An agent's sheet: its trace over the last minute, task, steps, files, model and last words" width="330" align="right">
+
+Click an agent to open its sheet in place of the list:
+
+- its activity over the last minute
+- **Message** and **Stop**, first, so they're never scrolled away
+- the task it was given (with **More** for the whole brief)
+- its latest steps, with how long ago
+- the files it changed
+- its model, effort and context size
+- its last words
+
+**← Back** returns to your agents. Agents that started before REDhelm loaded are filled in from Claude Code's record of their conversation.
+
+<br clear="right">
+
+### A background that moves with the work
+
+<img src="docs/images/redhelm-backgrounds.png" alt="The four sidebar backgrounds: ripples, lattice, field and ember" width="920">
+
+The sidebar sits on black with a quiet grid of `+` signs. Each tool call sends a ring through the grid in its agent's colour, starting from its place on the activity line. Rows sit on plates of the background colour, so text never lands on the pattern. Choose another in `/config` → **Background**: a still grid, drifting ASCII clouds, a slow red glow, or none.
+
+### Light and dark
+
+<img src="docs/images/redhelm-light.png" alt="REDhelm in Claude Code's light theme" width="330" align="right">
+
+REDhelm follows Claude Code's theme (`/theme`): black with a grey grid in a dark theme, white with a light grey grid in a light theme. With `auto` it follows your desktop's appearance.
+
+If your terminal is light but Claude Code's theme is dark, Claude Code draws dark-theme colours, and so does REDhelm. Set `/theme` to light to match.
+
+<br clear="right">
+
+### Above the prompt
+
+<img src="docs/images/redhelm-bottom.png" alt="REDhelm as a bar above the prompt: a question and two working agents, one line each" width="920">
+
+`/redhelm bottom` lays the same panel out as a bar above the prompt, one line per agent, with names in one column. With the panel closed, a single line appears there only when something needs you.
+
+### And quietly, in the background
+
+- **Model guard.** If Claude Code switches models on its own, your next prompt and Claude's tools wait until you choose with `/model`. If your saved default moved to a newer version, the session tells you once. `/redhelm models` shows which models actually answered.
+- **Where work lands.** A warning when two live agents edit the same file.
+- **Workflows.** Shows progress from lane boards (`docs/aaa/board/lanes.json`), status boards (`.status-board/`), REDStudio (`.redstudio/`) and REDManager (`.redmanager/`) in the project.
+- **Long-turn notifications.** A desktop notification (macOS, Linux) when a long turn finishes.
+- **Updates.** When a newer REDhelm is published, a quiet line at the bottom of the panel offers **Update**. Nothing pops up.
+
+## Commands
+
+| Command | What it does |
 |---|---|
 | `/redhelm` | Open or close the panel |
 | `/redhelm right` · `/redhelm bottom` | Sidebar beside the conversation, or a bar above the prompt |
 | `/redhelm setup` | Review the Claude Code settings REDhelm recommends |
-| `/redhelm models` | Which models actually answered this session, recent switches, and what REDhelm's labels used |
-| `/redhelm update` | Install the newer REDhelm, if there is one (then `/reload-plugins`) |
+| `/redhelm models` | Which models answered this session, recent switches, and what REDhelm's labels used |
+| `/redhelm update` | Install a newer REDhelm, if there is one (then `/reload-plugins`) |
 
-![REDhelm above the prompt](docs/images/redhelm-bottom.png)
+You can also write to an agent directly: `→ name: your message`.
 
-The right sidebar needs Claude Code's fullscreen layout (`"tui": "fullscreen"`) and a
-terminal at least 110 columns wide. That minimum is Claude Code's own and plugins cannot
-change it; in a narrower terminal, or the classic layout, REDhelm opens above the prompt
-instead.
+## Settings
 
-REDhelm's buttons need the fullscreen layout too: on the classic layout the terminal keeps
-the mouse, so clicks never reach them, and REDhelm says so under its name. Run
-`/tui fullscreen` to turn fullscreen on. Claude Code also switches fullscreen off by itself
-after a couple of launches that fail to start, and the classic layout stays until you run
-`/tui fullscreen` (or set `CLAUDE_CODE_NO_FLICKER=1`).
-
-### Setup card
-
-On first run REDhelm offers a short list of Claude Code settings. Nothing changes until
-you press **Apply**:
-
-- Pause instead of switching models when safeguards flag a message
-- Show how long each turn took, and timestamp messages
-- Push to your phone when a question is waiting (where available)
-- A status line with the model that actually answers and its effort, plus model and
-  effort on each row of the agent panel (needs `python3`)
-
-### Settings
-
-Every option is a row in `/config`, per user:
+Every option is a row in `/config`:
 
 | Setting | Values | Default |
 |---|---|---|
 | Placement | right · bottom | right |
-| REDhelm line under the prompt | off · problems · always | off |
+| Background (sidebar, terminal) | ripples · lattice · field · ember · none | ripples |
+| Motion: traces move, a new question's edge flashes | on · off | on |
+| Labels: headlines and question titles | haiku · plain | haiku |
 | When the model changes without you | hold · warn · off | hold |
+| REDhelm line under the prompt | off · problems · always | off |
 | Desktop notification after (seconds) | number, 0 = off | 120 |
 | Open REDhelm by itself | on · off | on |
 | Pop-ups when agents finish or message you | on · off | on |
-| Motion: traces move, a new question's edge flashes | on · off | on |
-| Labels: headlines and question titles | haiku · plain | haiku |
-| Background (sidebar, terminal) | ripples · lattice · field · ember · none | ripples |
 
-## Privacy
+On first run REDhelm also offers a short setup card of Claude Code settings it recommends. Nothing changes until you press **Apply**:
 
-REDhelm reads your project folder and Claude Code's own session data on your machine.
-What it remembers (model switches, the newest model versions seen, which setup items you
-handled) stays in Claude Code's plugin storage on your machine.
+- pause instead of switching models when safeguards flag a message
+- show how long each turn took, and timestamp messages
+- push to your phone when a question is waiting (where available)
+- a status line with the model that actually answers and its effort, plus model and effort on each agent row (needs `python3`)
 
-It reaches out in two ways:
+## Troubleshooting
 
-- **Update check.** A few times a day it reads REDhelm's published version number from
-  GitHub. It sends nothing about you or your work.
-- **Labels.** While REDhelm is on screen, it asks Claude Code's small model for short
-  headlines and question titles. Each request carries an agent's task (first 300
-  characters), its latest steps and words, or a question an agent asked; it goes through
-  Claude Code, to the same provider as the rest of your session, and counts toward your
-  usage: a few hundred tokens each. At most one request runs at a time; an agent's
-  headline is asked for again only when its steps change, at most every 45 seconds; no
-  more than 30 requests go out in an hour; answers are reused. `/redhelm models` shows
-  what labels have used this session. Set Labels to `plain` to turn them off.
+<details>
+<summary><b>Buttons don't respond to clicks</b></summary>
 
-## Behaviour notes
+Clicks need Claude Code's fullscreen layout; on the classic layout the terminal keeps the mouse, and REDhelm says so under its name. Run `/tui fullscreen`. Claude Code also turns fullscreen off by itself after a couple of launches that fail to start; it stays off until you run `/tui fullscreen` (or set `CLAUDE_CODE_NO_FLICKER=1`).
+</details>
 
-- Runs only in interactive sessions; `claude -p`, SDK and other headless runs are left
-  untouched.
-- If REDhelm itself ever errors, the call it was watching goes through unchanged.
+<details>
+<summary><b>REDhelm opens above the prompt instead of on the right</b></summary>
+
+The sidebar needs the fullscreen layout and a terminal at least 110 columns wide. That minimum is Claude Code's own; plugins can't change it.
+</details>
+
+<details>
+<summary><b>REDhelm is dark in my light terminal</b></summary>
+
+REDhelm follows Claude Code's theme, not the terminal's. Run `/theme` and pick light (or auto).
+</details>
+
+<details>
+<summary><b>I don't want the background, or the motion</b></summary>
+
+`/config` → **Background** → none brings back the plain pane; **Motion** → off holds every trace and background still.
+</details>
+
+## Privacy and cost
+
+REDhelm reads your project folder and Claude Code's own session data on your machine. What it remembers (model switches, the newest model versions seen, which setup items you handled) stays in Claude Code's plugin storage on your machine. It reaches out in two ways:
+
+- **Update check.** A few times a day it reads REDhelm's published version number from GitHub. It sends nothing about you or your work.
+- **Labels.** While REDhelm is on screen, it asks Claude Code's small model (Haiku, low effort) for short headlines and question titles. Each request carries an agent's task (first 300 characters), its latest steps and words, or a question an agent asked. It goes through Claude Code, to the same provider as the rest of your session, and counts toward your usage: a few hundred tokens each. One request at a time; an agent's headline is asked for again only when its steps change, at most every 45 seconds; no more than 30 requests an hour; answers are reused. `/redhelm models` shows what labels used. Set **Labels** to plain to turn them off.
+
+REDhelm runs only in interactive sessions (`claude -p`, the SDK and other headless runs are left alone), and if it ever errors, the call it was watching goes through unchanged.
 
 ## Develop
 
-```
+```sh
 claude plugin validate plugins/redhelm
 claude plugin test plugins/redhelm
+claude --plugin-dir ./plugins/redhelm   # try a working copy without installing
 ```
 
-Load a working copy without installing: `claude --plugin-dir ./plugins/redhelm`.
+REDhelm is a Claude Code plugin built on function hooks: [`hooks/register.tsx`](plugins/redhelm/hooks/register.tsx) wires the events, [`hooks/view.tsx`](plugins/redhelm/hooks/view.tsx) draws the panel, and the traces and backgrounds are pure modules ([`trace.ts`](plugins/redhelm/hooks/trace.ts), [`backdrop.ts`](plugins/redhelm/hooks/backdrop.ts)) repainted in place on the terminal. The design notes live in [`docs/superpowers`](docs/superpowers).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

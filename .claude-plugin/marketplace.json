@@ -1,6 +1,6 @@
 {
   "name": "redhelm",
-  "description": "REDhelm: a live agents sidebar and model guard for Claude Code.",
+  "description": "REDhelm: a live control panel for your Claude Code agents.",
   "owner": {
     "name": "watLr"
   },
@@ -8,7 +8,7 @@
     {
       "name": "redhelm",
       "source": "./plugins/redhelm",
-      "description": "Live sidebar for your Claude Code agents: what they do, where their work lands, what needs you, and a model guard."
+      "description": "A live control panel for your Claude Code agents: activity traces, questions that wait for you, an agent sheet with Message and Stop, and a model guard."
     }
   ]
 }
