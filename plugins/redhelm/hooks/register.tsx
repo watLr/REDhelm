@@ -688,6 +688,13 @@ export const register: Register = (on, options) => {
   on('session.send', async ($, e, next) => {
     const r = await next(e)
     const from = e.agentId
+    // The main conversation writing to an agent that asked something: Claude answered it, so it no longer waits on you.
+    if (active && !from && r.isDelivered) await quietly(async () => {
+      const to = (await $.agent.list()).find(p => p.id === e.to || p.name === e.to || p.teammateId === e.to)?.id ?? (await agentNamed($, e.to))
+      if (!to || !(await read($, inbox)).some(m => m.agentId === to)) return
+      await update($, inbox, list => list.filter(m => m.agentId !== to))
+      if (e.origin.kind === 'model') await note($, { kind: 'reply', text: `Claude → ${await nameOf($, to)}: ${excerpt(tidy(e.text), 60)}`, agentId: to })
+    })
     if (active && from && r.isDelivered) await quietly(async () => {
       const peers = await $.agent.list()
       const peer = peers.find(p => p.id === e.to || p.name === e.to || p.teammateId === e.to)

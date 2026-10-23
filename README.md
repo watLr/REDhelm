@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, three are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.4.4).** Covered by tests and checked with real agents:
+> **Status: early release (0.4.5).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 

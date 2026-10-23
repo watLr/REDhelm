@@ -572,6 +572,30 @@ describe('agents Claude Code no longer lists', () => {
     await ui.unmount()
   })
 
+  test('a question the main Claude answers stops asking for you', async ($: any, on: any) => {
+    const docs = { id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }
+    const api = { id: 'a2', name: 'api', description: 'Fix the API tests', type: 'general-purpose', status: 'running' }
+    on('agent.list', () => ({ value: [docs, api] }))
+    on('session.send', () => ({ isDelivered: true }))
+    await engine(on, true)($)
+    await clock.advance(3_000) // REDhelm reads the list
+    await $.session.send({ to: 'lead', text: 'Blue or green for the save button?', agentId: 'a1' })
+    await $.session.send({ to: 'lead', text: 'Which test runner?', agentId: 'a2' })
+    let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /2 needs you/ })).toBeDefined()
+    await ui.unmount()
+    await $.session.send({ to: 'docs', text: 'Green, to match the brand' }) // the main conversation, by name
+    ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Blue or green/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Which test runner/ })).toBeDefined()
+    await ui.unmount()
+    await $.session.send({ to: 'a2', text: 'Use the one in package.json' }) // and by id
+    ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('a message from an agent that is gone stops asking for you; one still listed keeps asking', async ($: any, on: any) => {
     let listed: any[] = [{ id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }]
     on('agent.list', () => ({ value: listed }))
