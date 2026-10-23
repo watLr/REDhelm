@@ -1,17 +1,24 @@
 import type { Elements } from 'claude-code'
 
 import type { Agent, Guard, Message, Note, Release, SetupItem, Workspace } from '../types'
-import { capital, doing, excerpt, grouped, isStale, kilo, looksLikeQuestion, minutes, modelWords, overlaps, short } from './model'
+import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
+import { DEFAULT_COLOR, braille, buckets, isMoving, rasterCells, svgTrace } from './trace'
 
 /**
- * REDhelm looks like an app, not a log: agents sit on cards with a colored initial, what needs
- * you carries a badge and filled buttons, and every agent opens into a sheet with its full
- * context. Plain sentences throughout; nothing to decode.
+ * Every agent is a live signal. Each row carries a trace of its tool calls: the trace moves while
+ * the agent works and flattens when it goes quiet, and a question turns the edge amber. State is
+ * a glyph, not a sentence; the few words left say what the agent is on.
  */
 
-/** The elements every surface has (typed, so a prop no surface takes fails tsc). */
+/** The elements every surface has (typed, so a prop no surface takes fails tsc), plus each surface's trace. */
 type Table = Elements['terminal']
-export type Els = Pick<Table, 'Box' | 'Text' | 'Button'> & { Input?: Table['Input'] }
+export type Els = Pick<Table, 'Box' | 'Text' | 'Button'> & {
+  Input?: Table['Input']
+  /** Terminal: a trace repainted in place. */
+  Raster?: Table['Raster']
+  /** Desktop, VS Code, mobile: the trace as a drawing. */
+  Svg?: Elements['desktop']['Svg']
+}
 
 export type Actions = {
   inspect: (id: string | null) => void
@@ -29,6 +36,9 @@ export type Actions = {
   /** Installs the newer REDhelm through Claude Code's plugin update. */
   update: () => void
 }
+
+/** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colour once flat, the cells it holds. */
+export type TraceSpec = { agentId: string; cells: number; rows: number; quiet: number; sent?: string }
 
 export type View = {
   now: number
@@ -50,21 +60,34 @@ export type View = {
   /** 'light' or 'dark', from the person's Claude Code theme. */
   theme: 'light' | 'dark'
   lanes: Record<string, string>
+  /** Each agent's recent tool call times, for its trace. */
+  traces: Record<string, readonly number[]>
+  /** The clock when this was drawn: where the traces end. */
+  at: number
+  /** Moving traces and the question flash; off, Rasters give way to still text. */
+  motion: boolean
+  /** Told of every Raster drawn, so the frame loop repaints it. */
+  mount?: (key: string, spec: TraceSpec) => void
 }
 
-// Tokens: surfaces follow the theme; meaning colors are the theme's own keys
+// Tokens: surfaces follow the theme; meaning colours are the theme's own keys
 
 const PALETTE = {
-  dark: { card: '#1c1c21', chip: '#2c2c33', chipHover: '#3a3a42', primary: '#d6363c', primaryHover: '#e5484d', rule: '#2c2c33' },
-  light: { card: '#f2f2f5', chip: '#e2e2e7', chipHover: '#d4d4db', primary: '#fbd5d6', primaryHover: '#f8c1c3', rule: '#e2e2e7' },
+  dark: { card: '#1c1c21', chip: '#2c2c33', chipHover: '#3a3a42', primary: '#d6363c', primaryHover: '#e5484d', rule: '#2c2c33', hover: '#232329', quiet: 0x5a5a64, svg: '#b4b4be', svgQuiet: '#55555e' },
+  light: { card: '#f2f2f5', chip: '#e2e2e7', chipHover: '#d4d4db', primary: '#fbd5d6', primaryHover: '#f8c1c3', rule: '#e2e2e7', hover: '#ececf0', quiet: 0xa8a8b2, svg: '#55555e', svgQuiet: '#b8b8c0' },
 } as const
-
-const AVATARS = ['#4f8ff7', '#a777f2', '#22b8a6', '#f0883e', '#e8659a', '#8cc152']
 
 const tone = (v: View) => PALETTE[v.theme] ?? PALETTE.dark
 
-/** The same color for an agent everywhere it appears. */
-const avatarColor = (id: string) => AVATARS[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % AVATARS.length]!
+/** One glyph per state, the same in every row, card, sheet and count. */
+const GLYPH: Record<State, { glyph: string; color?: string }> = {
+  working: { glyph: '▶' },
+  quiet: { glyph: '▷', color: 'subtle' },
+  waiting: { glyph: '◆', color: 'subtle' },
+  asks: { glyph: '⚑', color: 'warning' },
+  done: { glyph: '✓', color: 'success' },
+  failed: { glyph: '✕', color: 'error' },
+}
 
 const LIVE = new Set<Agent['status']>(['pending', 'running', 'waiting'])
 
@@ -87,20 +110,27 @@ export function rack(v: View): Strip[] {
     (rank(a) === 2 ? (b.agent.endedAt ?? 0) - (a.agent.endedAt ?? 0) : a.agent.startedAt - b.agent.startedAt))
 }
 
-/** "1 needs you · 2 working", "3 finished", "No agents running" */
-const counts = (v: View) => {
-  const strips = rack(v)
-  const needs = strips.filter(s => s.cocked).length
-  const working = strips.filter(s => !s.cocked && LIVE.has(s.agent.status)).length
-  const done = strips.length - needs - working
-  const parts = [needs && `${needs} needs you`, working && `${working} working`, !needs && !working && done && `${done} finished`]
-  return parts.filter(Boolean).join(' · ') || 'No agents running'
-}
-
-const ago = (ms: number) => (ms < 60_000 ? 'just now' : `${minutes(ms)} ago`)
-
 /** A workspace's name, short: "Demo app (web folder) — beta" → "Demo app". */
 export const shortName = (name: string) => name.split(/\s[(—–-]\s?/)[0]!.trim() || name
+
+/** A name cut to the columns the grid leaves it. */
+const fit = (text: string, room: number) => (text.length <= room ? text : `${text.slice(0, Math.max(1, room - 1))}…`)
+
+/** The time column: how long it has run, how long ago it ended, or the state that matters more. */
+function when(a: Agent, v: View) {
+  const state = stateOf(a, v.now)
+  if (!LIVE.has(a.status)) return age(v.now - (a.endedAt ?? v.now))
+  return state === 'quiet' ? 'quiet' : state === 'waiting' ? 'waits' : age(v.now - a.startedAt)
+}
+
+/**
+ * Every time REDhelm shows, as one string: when it changes, a redraw is due. An agent past its first
+ * minute changes it once a minute, so its trace moves by repaints alone, with no redraw between.
+ */
+export function clockFace(agents: Agent[], inbox: Message[], now: number) {
+  const v = { now } as View
+  return [...agents.map(a => `${a.id}:${when(a, v)}`), ...inbox.map(m => `${m.id}:${age(now - m.at)}`)].join(' ')
+}
 
 // Primitives
 
@@ -109,15 +139,10 @@ function Brand({ els }: { els: Els }) {
   return <Text><Text bold color="error">RED</Text><Text bold>helm</Text></Text>
 }
 
-/** A colored initial: how you recognize an agent at a glance. */
-function Avatar({ els, a, v }: { els: Els; a: Agent; v: View }) {
-  const { Text } = els
-  return <Text bold color="inverseText" backgroundColor={avatarColor(a.id)}> {label(a, v.lanes).charAt(0)} </Text>
-}
-
-function Badge({ els, text, color }: { els: Els; text: string; color: string }) {
-  const { Text } = els
-  return <Text bold color="inverseText" backgroundColor={color} wrap="truncate-end"> {text} </Text>
+function Glyph({ els, state }: { els: Els; state: State }) {
+  const { Box, Text } = els
+  const g = GLYPH[state]
+  return <Box width={2} flexShrink={0}><Text color={g.color}>{g.glyph}</Text></Box>
 }
 
 /** A filled button: the primary one in REDhelm red, the rest quiet. */
@@ -131,36 +156,188 @@ function Chip({ els, v, k, text, primary, onPress }: { els: Els; v: View; k: str
   )
 }
 
+/** A filled surface with a coloured edge down its left side: a question, a model notice. */
+function EdgeCard({ els, v, k, edge, children }: { els: Els; v: View; k?: string; edge: string; children: any }) {
+  const { Box } = els
+  return (
+    <Box key={k} backgroundColor={tone(v).card}>
+      <Box width={1} flexShrink={0} backgroundColor={edge} />
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={1} paddingY={1}>{children}</Box>
+    </Box>
+  )
+}
+
 /** A filled surface: what makes a group read as one thing. */
 function Card({ els, v, children }: { els: Els; v: View; children: any }) {
   const { Box } = els
   return <Box flexDirection="column" backgroundColor={tone(v).card} paddingX={2} paddingY={1}>{children}</Box>
 }
 
+/**
+ * An agent's tool calls over the last half minute (a row) or minute (the sheet), as braille bars.
+ * Terminal: a Raster the frame loop repaints in place while it moves. Elsewhere, a drawing.
+ */
+function Trace({ els, v, a, k, cells, rows = 1 }: { els: Els; v: View; a: Agent; k: string; cells: number; rows?: number }) {
+  const { Box, Text, Raster, Svg } = els
+  const t = tone(v)
+  const times = v.traces[a.id] ?? []
+  const counts = buckets(times, v.at, cells * 2)
+  const moving = isMoving(times, v.at)
+  if (Raster && v.motion) {
+    const drawn = rasterCells(braille(counts, rows), moving ? DEFAULT_COLOR : t.quiet)
+    v.mount?.(k, { agentId: a.id, cells, rows, quiet: t.quiet, sent: drawn })
+    return <Box width={cells} flexShrink={0}><Raster key={k} columns={cells} rows={rows} cells={drawn} /></Box>
+  }
+  if (Svg) {
+    return <Box flexShrink={0}><Svg source={svgTrace(counts, cells * 8, rows * 14, rows, moving ? t.svg : t.svgQuiet)} alt={moving ? 'Working' : 'Quiet'} width={cells * 8} height={rows * 14} /></Box>
+  }
+  return (
+    <Box width={cells} flexShrink={0} flexDirection="column">
+      {braille(counts, rows).map((line, i) => <Text key={`${k}-${i}`} color={moving ? undefined : 'subtle'}>{line}</Text>)}
+    </Box>
+  )
+}
+
+/** Message and Stop, revealed over the row's right side while the pointer is on it; no hook runs. */
+function HoverActions({ els, v, a, act, right }: { els: Els; v: View; a: Agent; act: Actions; right: number }) {
+  const { Box, Button } = els
+  const t = tone(v)
+  const scope = `row-${a.id}`
+  return (
+    <Box position="absolute" right={right} top={0} display="none" hover={{ display: 'flex', scope }} backgroundColor={t.hover} columnGap={1} paddingLeft={1}>
+      <Box backgroundColor={t.chip} paddingX={1}>
+        <Button key={`compose-${a.id}`} plain label="Message" hover={{ bold: true, backgroundColor: t.chipHover, scope: `compose-${a.id}` }} onPress={() => act.compose(a.id)} />
+      </Box>
+      <Box backgroundColor={t.chip} paddingX={1}>
+        <Button key={`stop-${a.id}`} plain label="Stop" hover={{ bold: true, backgroundColor: t.chipHover, scope: `stop-${a.id}` }} onPress={() => act.stop(a.id)} />
+      </Box>
+    </Box>
+  )
+}
+
+// The list
+
 function Header({ els, v }: { els: Els; v: View }) {
   const { Box, Text } = els
+  const strips = rack(v)
+  const asks = strips.filter(s => s.cocked).length
+  const live = strips.filter(s => !s.cocked && LIVE.has(s.agent.status)).length
+  const failed = strips.filter(s => !s.cocked && !LIVE.has(s.agent.status) && stateOf(s.agent, v.now) === 'failed').length
+  const done = strips.length - asks - live - failed
+  const counts = ([['asks', asks], ['working', live], ['done', done], ['failed', failed]] as const).filter(([, n]) => n > 0)
   return (
     <Box justifyContent="space-between" gap={2}>
       <Brand els={els} />
-      <Text color="subtle">{counts(v)}</Text>
+      <Box columnGap={2} flexShrink={0}>
+        {counts.length
+          ? counts.map(([state, n]) => <Text key={`count-${state}`} color={GLYPH[state].color}>{`${GLYPH[state].glyph} ${n}`}</Text>)
+          : <Text color="subtle">No agents yet</Text>}
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * One agent on the grid: edge, glyph, name, trace, time, ›; under it, what it is on. Pointing at
+ * a live one reveals Message and Stop over its right side.
+ */
+function Row({ els, s, v, act, columns, cells }: { els: Els; s: Strip; v: View; act: Actions; columns: number; cells: number }) {
+  const { Box, Text, Button } = els
+  const a = s.agent
+  const ended = !LIVE.has(a.status)
+  const older = isStale(a.model, v.guard.stale ?? v.guard.model)
+  const scope = `row-${a.id}`
+  // edge 1, glyph 2, trace and its gap, time 6, gap and › 2
+  const room = columns - 1 - 2 - (cells + 1) - 6 - 2 - (older ? 2 : 0)
+  return (
+    <Box key={scope} flexDirection="column" position="relative" hover={{ backgroundColor: tone(v).hover, scope }}>
+      <Box>
+        <Box width={1} flexShrink={0} />
+        <Glyph els={els} state={stateOf(a, v.now)} />
+        <Box flexGrow={1} flexShrink={1} minWidth={6}>
+          <Button key={`sel-${a.id}`} plain dimColor={ended} label={fit(label(a, v.lanes), Math.max(6, room))} hover={{ underline: true, scope }} onPress={() => act.inspect(a.id)} />
+        </Box>
+        {older && <Box width={2} flexShrink={0} justifyContent="flex-end"><Text color="warning">◷</Text></Box>}
+        <Box marginLeft={1} flexShrink={0}>
+          {ended ? <Box width={cells} /> : <Trace els={els} v={v} a={a} k={`trace-${a.id}`} cells={cells} />}
+        </Box>
+        <Box width={6} flexShrink={0} justifyContent="flex-end"><Text color="subtle">{when(a, v)}</Text></Box>
+        <Box marginLeft={1} flexShrink={0}>
+          <Button key={`open-${a.id}`} plain dimColor label="›" hover={{ bold: true, scope }} onPress={() => act.inspect(a.id)} />
+        </Box>
+      </Box>
+      <Box paddingLeft={3} paddingRight={2}>
+        <Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text>
+      </Box>
+      {!ended && v.composing !== a.id && <HoverActions els={els} v={v} a={a} act={act} right={2} />}
+    </Box>
+  )
+}
+
+/**
+ * An agent that asked you something: the amber edge, who, how long ago, the question in a line,
+ * and Reply. The edge flashes a few times when the question arrives, then holds.
+ */
+function QuestionCard({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actions }) {
+  const { Box, Text, Button } = els
+  const a = s.agent
+  const ask = s.messages.at(-1)!
+  const since = v.now - ask.at
+  const flash = v.motion && since >= 0 && since < 1500 && Math.floor(since / 250) % 2 === 1
+  return (
+    <EdgeCard els={els} v={v} k={`ask-${a.id}`} edge={flash ? tone(v).chip : 'warning'}>
+      <Box justifyContent="space-between" columnGap={1}>
+        <Box flexShrink={1} minWidth={6}>
+          <Glyph els={els} state="asks" />
+          <Button key={`sel-${a.id}`} plain label={label(a, v.lanes)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
+        </Box>
+        <Box flexShrink={0}><Text color="subtle">{`asks · ${age(since)}`}</Text></Box>
+      </Box>
+      <Box paddingLeft={2}>
+        <Text bold wrap="wrap">{ask.title ?? firstAsk(ask.text)}</Text>
+      </Box>
+      <Box paddingLeft={2} marginTop={1} justifyContent="space-between" columnGap={1} flexWrap="wrap">
+        <Box columnGap={1} flexWrap="wrap">
+          {v.composing === a.id
+            ? <Text color="warning">↓ type below</Text>
+            : <Chip els={els} v={v} k={`compose-${a.id}`} text="Reply" primary onPress={() => act.compose(a.id)} />}
+          {!LIVE.has(a.status) && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" onPress={() => act.dismiss(a.id)} />}
+        </Box>
+        <Box flexShrink={0}>
+          <Button key={`more-${a.id}`} plain dimColor label="Details ›" hover={{ bold: true, scope: `more-${a.id}` }} onPress={() => act.inspect(a.id)} />
+        </Box>
+      </Box>
+    </EdgeCard>
+  )
+}
+
+/** Finished agents fold into one line until you ask for them. */
+function Finished({ els, v, act, strips, columns, cells }: { els: Els; v: View; act: Actions; strips: Strip[]; columns: number; cells: number }) {
+  const { Box, Text, Button } = els
+  if (!strips.length) return null
+  return (
+    <Box flexDirection="column">
+      <Box justifyContent="space-between" gap={2}>
+        <Text color="subtle">{`Finished · ${strips.length}`}</Text>
+        <Button key="toggle-done" plain dimColor label={v.showDone ? 'Hide' : 'Show'} hover={{ bold: true, scope: 'toggle-done' }} onPress={act.toggleDone} />
+      </Box>
+      {v.showDone && strips.slice(0, 8).map(s => <Row key={`d-${s.agent.id}`} els={els} s={s} v={v} act={act} columns={columns} cells={cells} />)}
     </Box>
   )
 }
 
 /** Only a problem with the model earns space; the status line shows the model otherwise. */
 function ModelNotice({ els, v }: { els: Els; v: View }) {
-  const { Box, Text } = els
+  const { Text } = els
   const g = v.guard
   if (!g.fallback && !g.stale) return null
   return (
-    <Card els={els} v={v}>
-      <Box gap={1}>
-        <Badge els={els} text={g.fallback ? 'Model changed' : 'Older model'} color={g.fallback ? 'error' : 'warning'} />
-        <Text wrap="wrap">
-          {g.fallback ? `Claude Code switched models without you (${g.fallback}).` : `This session runs ${short(g.model)}; your default is now ${short(g.stale)}.`} Run /model to choose.
-        </Text>
-      </Box>
-    </Card>
+    <EdgeCard els={els} v={v} edge={g.fallback ? 'error' : 'warning'}>
+      <Text bold color={g.fallback ? 'error' : 'warning'}>{g.fallback ? '✕ Model changed' : '◷ Older model'}</Text>
+      <Text wrap="wrap">
+        {g.fallback ? `Claude Code switched models without you (${g.fallback}).` : `This session runs ${short(g.model)}; your default is now ${short(g.stale)}.`} Run /model to choose.
+      </Text>
+    </EdgeCard>
   )
 }
 
@@ -182,94 +359,6 @@ function Composer({ els, v, act }: { els: Els; v: View; act: Actions }) {
   )
 }
 
-function AgentButtons({ els, s, v, act, primary }: { els: Els; s: Strip; v: View; act: Actions; primary: string }) {
-  const { Box } = els
-  const a = s.agent
-  if (v.composing === a.id) return <els.Text color="warning">↓ type below</els.Text>
-  // In a narrow sidebar a button moves to the next line rather than breaking its label.
-  return (
-    <Box gap={1} flexWrap="wrap">
-      <Chip els={els} v={v} k={`compose-${a.id}`} text={primary} primary onPress={() => act.compose(a.id)} />
-      {LIVE.has(a.status) && <Chip els={els} v={v} k={`stop-${a.id}`} text="Stop" onPress={() => act.stop(a.id)} />}
-      {!LIVE.has(a.status) && s.cocked && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" onPress={() => act.dismiss(a.id)} />}
-      {v.inspecting !== a.id && <Chip els={els} v={v} k={`more-${a.id}`} text="Details" onPress={() => act.inspect(a.id)} />}
-    </Box>
-  )
-}
-
-/** An agent that asked you something: who, what it is on, the question, and what you can do. */
-function NeedsCard({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actions }) {
-  const { Box, Text, Button } = els
-  const a = s.agent
-  const ask = s.messages.at(-1)!
-  const name = label(a, v.lanes)
-  const task = a.description && a.description.toLowerCase() !== name.toLowerCase() ? a.description : undefined
-  return (
-    <Card els={els} v={v}>
-      {/* Narrow: the name wraps but keeps a few letters, and the time moves to the next line. */}
-      <Box justifyContent="space-between" columnGap={2} flexWrap="wrap">
-        <Box columnGap={1} flexShrink={1} flexWrap="wrap">
-          <Box flexShrink={0}><Avatar els={els} a={a} v={v} /></Box>
-          <Box flexShrink={1} minWidth={8}>
-            <Button key={`sel-${a.id}`} plain label={name} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
-          </Box>
-          <Box flexShrink={0}><Badge els={els} text="Asks you" color="warning" /></Box>
-        </Box>
-        <Text color="subtle" wrap="truncate-end">{ago(v.now - ask.at)}</Text>
-      </Box>
-      {task && <Text color="subtle" wrap="truncate-end">{task}</Text>}
-      <Box marginY={1}>
-        <Text wrap="wrap">{ask.text.trim().slice(0, 600)}</Text>
-      </Box>
-      <AgentButtons els={els} s={s} v={v} act={act} primary="Reply" />
-    </Card>
-  )
-}
-
-/** A working agent: avatar, one plain sentence, how long; the whole row opens its sheet. */
-function AgentRow({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actions }) {
-  const { Box, Text, Button } = els
-  const a = s.agent
-  const older = isStale(a.model, v.guard.stale ?? v.guard.model)
-  return (
-    <Box justifyContent="space-between" gap={2}>
-      <Box gap={1} flexShrink={1}>
-        <Box gap={1} flexShrink={0}>
-          <Avatar els={els} a={a} v={v} />
-          <Button key={`sel-${a.id}`} plain label={label(a, v.lanes)} hover={{ underline: true, scope: `row-${a.id}` }} onPress={() => act.inspect(a.id)} />
-        </Box>
-        <Text color="subtle" wrap="truncate-end">{doing(a, v.now)}</Text>
-        {older && <Box flexShrink={0}><Badge els={els} text="Older model" color="warning" /></Box>}
-      </Box>
-      <Box gap={2} flexShrink={0}>
-        <Text color="subtle">{minutes(v.now - a.startedAt)}</Text>
-        <Button key={`open-${a.id}`} plain dimColor label="›" hover={{ bold: true, scope: `row-${a.id}` }} onPress={() => act.inspect(a.id)} />
-      </Box>
-    </Box>
-  )
-}
-
-/** Finished agents fold into one line until you ask for them. */
-function Finished({ els, v, act, strips }: { els: Els; v: View; act: Actions; strips: Strip[] }) {
-  const { Box, Text, Button } = els
-  if (!strips.length) return null
-  return (
-    <Box flexDirection="column">
-      <Box justifyContent="space-between" gap={2}>
-        <Text color="subtle" wrap="truncate-end">{strips.length} finished · last: {label(strips[0]!.agent, v.lanes)}</Text>
-        <Button key="toggle-done" plain dimColor label={v.showDone ? 'Hide' : 'Show'} onPress={act.toggleDone} />
-      </Box>
-      {v.showDone && strips.slice(0, 8).map(s => (
-        <Box key={`d-${s.agent.id}`} gap={1}>
-          <Avatar els={els} a={s.agent} v={v} />
-          <Button key={`sel-${s.agent.id}`} plain dimColor label={label(s.agent, v.lanes)} onPress={() => act.inspect(s.agent.id)} />
-          <Text color="subtle" wrap="truncate-end">{doing(s.agent, v.now)}{s.agent.answer ? `: ${excerpt(s.agent.answer, 80)}` : ''}</Text>
-        </Box>
-      ))}
-    </Box>
-  )
-}
-
 /** Two agents editing one file is the one thing about files worth interrupting you for. */
 function Overlaps({ els, v }: { els: Els; v: View }) {
   const { Box, Text } = els
@@ -280,9 +369,9 @@ function Overlaps({ els, v }: { els: Els; v: View }) {
   return (
     <Box flexDirection="column">
       {clash.map(c => (
-        <Box key={`c-${c.file}`} gap={1}>
-          <Badge els={els} text="Same file" color="warning" />
-          <Text wrap="wrap">{names(c.ids)} are both editing {c.file.split('/').pop()}</Text>
+        <Box key={`c-${c.file}`}>
+          <Box width={2} flexShrink={0}><Text color="warning">⚠</Text></Box>
+          <Text wrap="wrap">{names(c.ids)} both edit {c.file.split('/').pop()}</Text>
         </Box>
       ))}
     </Box>
@@ -372,7 +461,6 @@ function Workflows({ els, v }: { els: Els; v: View }) {
 
 // The agent sheet: everything about one agent, opened from any row
 
-/** One row of the sheet: a quiet label column and its value. */
 /** A labelled part of the sheet; `stacked` puts the label above, for a narrow sidebar. */
 function Field({ els, name, stacked, children }: { els: Els; name: string; stacked?: boolean; children: any }) {
   const { Box, Text } = els
@@ -386,7 +474,7 @@ function Field({ els, name, stacked, children }: { els: Els; name: string; stack
   }
   return (
     <Box gap={2}>
-      <Box width={13} flexShrink={0}><Text color="subtle">{name}</Text></Box>
+      <Box width={9} flexShrink={0}><Text color="subtle">{name}</Text></Box>
       <Box flexDirection="column" flexShrink={1}>{children}</Box>
     </Box>
   )
@@ -412,61 +500,79 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
   const ask = s.messages.at(-1)
   const live = LIVE.has(a.status)
   const stacked = columns < 50
-  const brief = a.brief?.trim()
-  const long = !!brief && brief.length > 280
+  const older = isStale(a.model, v.guard.stale ?? v.guard.model)
+  const brief = (a.brief || a.description || '').trim()
+  // Two lines of the task, then More.
+  const room = Math.max(60, (columns - (stacked ? 0 : 11)) * 2 - 4)
+  const long = brief.length > room
+  const said = a.answer || a.thinking
   return (
     <Box flexDirection="column" gap={1} width={columns}>
       {backButton}
-      <Box justifyContent="space-between" columnGap={2} flexWrap="wrap">
-        <Box columnGap={1} flexShrink={1} flexWrap="wrap">
-          <Box flexShrink={0}><Avatar els={els} a={a} v={v} /></Box>
-          <Box flexShrink={1} minWidth={8}><Text bold>{label(a, v.lanes)}</Text></Box>
-          {ask && <Box flexShrink={0}><Badge els={els} text="Asks you" color="warning" /></Box>}
+      <Box flexDirection="column">
+        <Box justifyContent="space-between" columnGap={2}>
+          <Box flexShrink={1} minWidth={6}>
+            <Glyph els={els} state={stateOf(a, v.now, !!ask)} />
+            <Text bold wrap="truncate-end">{label(a, v.lanes)}</Text>
+          </Box>
+          <Box flexShrink={0}><Text color="subtle">{when(a, v)}</Text></Box>
         </Box>
-        <Text color="subtle" wrap="truncate-end">{doing(a, v.now)} · {minutes((a.endedAt ?? v.now) - a.startedAt)}</Text>
+        <Box paddingLeft={2}><Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text></Box>
       </Box>
 
       {/* What you can do comes first, so a long sheet never pushes it out of sight. */}
-      <Box justifyContent="space-between" gap={2}>
-        {live || ask ? <AgentButtons els={els} s={s} v={v} act={act} primary={ask ? 'Reply' : 'Message'} /> : <Text color="subtle">This agent has finished.</Text>}
-        {!back && <Box flexShrink={0}><Text color="subtle">Esc to close</Text></Box>}
-      </Box>
+      {(live || ask || !back) && (
+        <Box justifyContent="space-between" columnGap={2} flexWrap="wrap">
+          <Box columnGap={1} flexWrap="wrap">
+            {v.composing === a.id
+              ? <Text color="warning">↓ type below</Text>
+              : (live || ask) && <Chip els={els} v={v} k={`compose-${a.id}`} text={ask ? 'Reply' : 'Message'} primary onPress={() => act.compose(a.id)} />}
+            {live && <Chip els={els} v={v} k={`stop-${a.id}`} text="Stop" onPress={() => act.stop(a.id)} />}
+            {!live && ask && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" onPress={() => act.dismiss(a.id)} />}
+          </Box>
+          {!back && <Box flexShrink={0}><Text color="subtle">Esc to close</Text></Box>}
+        </Box>
+      )}
 
       {ask && (
-        <Card els={els} v={v}>
-          <Text color="subtle">Asks you · {ago(v.now - ask.at)}</Text>
+        <EdgeCard els={els} v={v} edge="warning">
+          <Text color="subtle">{`asks · ${age(v.now - ask.at)}`}</Text>
           <Text wrap="wrap">{ask.text.trim().slice(0, 1200)}</Text>
-        </Card>
+        </EdgeCard>
       )}
+
+      {live && <Trace els={els} v={v} a={a} k={`trace-big-${a.id}`} cells={16} rows={columns >= 40 ? 4 : 2} />}
 
       <Box flexDirection="column" gap={1}>
         {brief && (
-          <Field els={els} stacked={stacked} name="Asked to">
-            <Text wrap="wrap">{v.briefOpen || !long ? brief : `${brief.slice(0, 280).trimEnd()}…`}</Text>
-            {long && <Button key="brief-more" plain dimColor label={v.briefOpen ? 'Less' : 'More'} onPress={act.toggleBrief} />}
+          <Field els={els} stacked={stacked} name="Task">
+            <Text wrap="wrap">{v.briefOpen || !long ? brief : `${brief.slice(0, room).trimEnd()}…`}</Text>
+            {long && <Button key="brief-more" plain dimColor label={v.briefOpen ? 'Less' : 'More'} hover={{ bold: true, scope: 'brief-more' }} onPress={act.toggleBrief} />}
           </Field>
         )}
-        {!brief && a.description && <Field els={els} stacked={stacked} name="Working on"><Text wrap="wrap">{a.description}</Text></Field>}
         {a.steps?.length > 0 && (
-          <Field els={els} stacked={stacked} name="Recent steps">
+          <Field els={els} stacked={stacked} name="Steps">
             {grouped(a.steps).slice(0, 6).map((st, i) => (
               <Box key={`st-${i}`} justifyContent="space-between" gap={2}>
                 <Text wrap="truncate-end">{st.text}{st.count > 1 ? <Text color="subtle"> ×{st.count}</Text> : ''}</Text>
-                {st.at !== undefined && <Box flexShrink={0}><Text color="subtle">{ago(v.now - st.at)}</Text></Box>}
+                {st.at !== undefined && <Box flexShrink={0}><Text color="subtle">{age(v.now - st.at)}</Text></Box>}
               </Box>
             ))}
           </Field>
         )}
-        {!brief && !a.description && !a.steps?.length && !a.thinking && !a.answer && (
+        {!brief && !a.steps?.length && !said && (
           <Text color="subtle" wrap="wrap">This agent started before REDhelm, and Claude Code has no record of its work to show.</Text>
         )}
-        {/* Once it has finished, its last words say it; thinking would only repeat them. */}
-        {live && a.thinking && <Field els={els} stacked={stacked} name="Thinking"><Text color="subtle" wrap="wrap">{a.thinking}</Text></Field>}
-        <Field els={els} stacked={stacked} name="Changed">
-          <Text wrap="truncate-end">{a.files.length ? a.files.slice(-4).map(f => f.split('/').pop()).join(', ') + (a.files.length > 4 ? ` and ${a.files.length - 4} more` : '') : 'nothing yet'}</Text>
+        <Field els={els} stacked={stacked} name="Files">
+          <Text wrap="truncate-end">{a.files.length ? a.files.slice(-4).map(f => f.split('/').pop()).join(', ') + (a.files.length > 4 ? ` +${a.files.length - 4}` : '') : 'none yet'}</Text>
         </Field>
-        {a.model && <Field els={els} stacked={stacked} name="Model"><Text>{modelWords(a.model, a.effort)}{a.context ? ` · ${kilo(a.context)} tokens of context` : ''}</Text></Field>}
-        {(a.answer || (!live && a.thinking)) && <Field els={els} stacked={stacked} name="Last said"><Text color="subtle" wrap="wrap">{a.answer || a.thinking}</Text></Field>}
+        {a.model && (
+          <Field els={els} stacked={stacked} name="Model">
+            <Text>{modelWords(a.model, a.effort)}{older ? <Text color="warning"> ◷ older</Text> : ''}</Text>
+          </Field>
+        )}
+        {a.context > 0 && <Field els={els} stacked={stacked} name="Context"><Text>{kilo(a.context)} tokens</Text></Field>}
+        {said && <Field els={els} stacked={stacked} name="Last said"><Text color="subtle" wrap="wrap">{said}</Text></Field>}
       </Box>
     </Box>
   )
@@ -497,13 +603,14 @@ function NoClicks({ els }: { els: Els }) {
 
 // Shapes
 
-/** Right dock: tall and narrow. */
+/** Right dock: tall and narrow. Below 30 columns the trace halves so names and times keep their room. */
 function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actions; columns: number; classic: boolean }) {
-  const { Box, Text } = els
+  const { Box } = els
   const strips = rack(v)
   const needs = strips.filter(s => s.cocked)
   const working = strips.filter(s => !s.cocked && LIVE.has(s.agent.status))
   const done = strips.filter(s => !s.cocked && !LIVE.has(s.agent.status))
+  const cells = columns < 30 ? 4 : 8
   return (
     <Box flexDirection="column" gap={1} width={columns}>
       <Header els={els} v={v} />
@@ -511,14 +618,13 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       <Composer els={els} v={v} act={act} />
       <ModelNotice els={els} v={v} />
       <SetupCard els={els} v={v} act={act} />
-      {needs.map(s => <NeedsCard key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
+      {needs.map(s => <QuestionCard key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
       {working.length > 0 && (
-        <Box flexDirection="column">
-          {working.map(s => <AgentRow key={s.agent.id} els={els} s={s} v={v} act={act} />)}
+        <Box flexDirection="column" rowGap={1}>
+          {working.map(s => <Row key={s.agent.id} els={els} s={s} v={v} act={act} columns={columns} cells={cells} />)}
         </Box>
       )}
-      {!strips.length && <Text color="subtle">Agents you start show up here.</Text>}
-      <Finished els={els} v={v} act={act} strips={done} />
+      <Finished els={els} v={v} act={act} strips={done} columns={columns} cells={cells} />
       <Overlaps els={els} v={v} />
       <Workflows els={els} v={v} />
       <Update els={els} v={v} act={act} />
@@ -527,23 +633,50 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
 }
 
 /** One line for an agent that asked you something, for the short bottom bar. */
-function NeedsLine({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actions }) {
+function NeedsLine({ els, s, v, act, name }: { els: Els; s: Strip; v: View; act: Actions; name: number }) {
   const { Box, Text, Button } = els
   const a = s.agent
   const ask = s.messages.at(-1)!
   return (
-    <Box justifyContent="space-between" gap={2}>
-      <Box gap={1} flexShrink={1}>
-        <Box gap={1} flexShrink={0}>
-          <Avatar els={els} a={a} v={v} />
-          <Button key={`sel-${a.id}`} plain label={label(a, v.lanes)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
-          <Badge els={els} text="Asks you" color="warning" />
-        </Box>
-        <Text wrap="truncate-end">{excerpt(ask.text, 160)}</Text>
+    <Box>
+      <Box width={1} flexShrink={0} backgroundColor="warning" />
+      <Glyph els={els} state="asks" />
+      <Box width={name} flexShrink={0}>
+        <Button key={`sel-${a.id}`} plain label={fit(label(a, v.lanes), name - 1)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
       </Box>
-      <Box flexShrink={0}>
-        <AgentButtons els={els} s={s} v={v} act={act} primary="Reply" />
+      <Box flexGrow={1} flexShrink={1}><Text bold wrap="truncate-end">{ask.title ?? firstAsk(ask.text, 160)}</Text></Box>
+      <Box flexShrink={0} columnGap={1} marginLeft={2}>
+        {v.composing === a.id
+          ? <Text color="warning">↓ type below</Text>
+          : <Chip els={els} v={v} k={`compose-${a.id}`} text="Reply" primary onPress={() => act.compose(a.id)} />}
+        {!LIVE.has(a.status) && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" onPress={() => act.dismiss(a.id)} />}
+        <Button key={`more-${a.id}`} plain dimColor label="Details ›" hover={{ bold: true, scope: `more-${a.id}` }} onPress={() => act.inspect(a.id)} />
       </Box>
+    </Box>
+  )
+}
+
+/** One line for a working agent in the bottom bar: the same grid laid flat, names in one aligned column. */
+function WideRow({ els, s, v, act, name }: { els: Els; s: Strip; v: View; act: Actions; name: number }) {
+  const { Box, Text, Button } = els
+  const a = s.agent
+  const scope = `row-${a.id}`
+  const older = isStale(a.model, v.guard.stale ?? v.guard.model)
+  return (
+    <Box key={scope} position="relative" hover={{ backgroundColor: tone(v).hover, scope }}>
+      <Box width={1} flexShrink={0} />
+      <Glyph els={els} state={stateOf(a, v.now)} />
+      <Box width={name} flexShrink={0}>
+        <Button key={`sel-${a.id}`} plain label={fit(label(a, v.lanes), name - (older ? 3 : 1))} hover={{ underline: true, scope }} onPress={() => act.inspect(a.id)} />
+        {older && <Text color="warning"> ◷</Text>}
+      </Box>
+      <Trace els={els} v={v} a={a} k={`trace-${a.id}`} cells={8} />
+      <Box flexGrow={1} flexShrink={1} marginLeft={2}><Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text></Box>
+      <Box width={6} flexShrink={0} justifyContent="flex-end"><Text color="subtle">{when(a, v)}</Text></Box>
+      <Box marginLeft={1} flexShrink={0}>
+        <Button key={`open-${a.id}`} plain dimColor label="›" hover={{ bold: true, scope }} onPress={() => act.inspect(a.id)} />
+      </Box>
+      {v.composing !== a.id && <HoverActions els={els} v={v} a={a} act={act} right={9} />}
     </Box>
   )
 }
@@ -559,25 +692,36 @@ function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View
   const shownWorking = working.slice(0, Math.max(0, room - shownNeeds.length))
   const hidden = needs.length + working.length - shownNeeds.length - shownWorking.length
   const right = v.guard.fallback || v.guard.stale ? null : relevant(v).map(summary).filter(Boolean).join('   ')
+  // One name column for every line, as wide as the longest name shown (within reason).
+  const name = Math.min(22, Math.max(8, ...[...shownNeeds, ...shownWorking].map(s => label(s.agent, v.lanes).length + 3)))
   return (
     <Box flexDirection="column" width={columns}>
       {rule && <Text color={tone(v).rule}>{'─'.repeat(Math.max(1, columns))}</Text>}
       <Box justifyContent="space-between" gap={3}>
-        <Box flexShrink={0} gap={2}>
-          <Brand els={els} />
-          <Text color="subtle">{counts(v)}</Text>
+        <Box flexShrink={0} gap={3}>
+          <Header els={els} v={v} />
           <Update els={els} v={v} act={act} />
         </Box>
-        {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <ModelNotice els={els} v={v} />}
+        {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <WideNotice els={els} v={v} />}
       </Box>
       {classic && <NoClicks els={els} />}
       <Composer els={els} v={v} act={act} />
       <SetupCard els={els} v={v} act={act} />
-      {shownNeeds.map(s => <NeedsLine key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
-      {shownWorking.map(s => <AgentRow key={s.agent.id} els={els} s={s} v={v} act={act} />)}
-      {hidden > 0 && <Text color="subtle">and {hidden} more · /redhelm right shows them all</Text>}
+      {shownNeeds.map(s => <NeedsLine key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} name={name} />)}
+      {shownWorking.map(s => <WideRow key={s.agent.id} els={els} s={s} v={v} act={act} name={name} />)}
+      {hidden > 0 && <Text color="subtle">{`+${hidden} more · /redhelm right shows them all`}</Text>}
     </Box>
   )
+}
+
+/** The model notice as one line, for the bar. */
+function WideNotice({ els, v }: { els: Els; v: View }) {
+  const { Text } = els
+  const g = v.guard
+  if (!g.fallback && !g.stale) return null
+  return g.fallback
+    ? <Text wrap="truncate-end"><Text bold color="error">✕ Model changed</Text><Text color="subtle"> {g.fallback} · /model to choose</Text></Text>
+    : <Text wrap="truncate-end"><Text bold color="warning">◷ Older model</Text><Text color="subtle"> default is now {short(g.stale)} · /model</Text></Text>
 }
 
 /**
@@ -598,16 +742,13 @@ export function Alert({ els, v, act }: { els: Els; v: View; act: Actions }) {
   const first = rack(v).find(s => s.cocked)
   const ask = first?.messages.at(-1)
   const body = v.guard.fallback
-    ? <Box gap={1}><Badge els={els} text="Model changed" color="error" /><Text wrap="truncate-end">Run /model to choose.</Text></Box>
+    ? <Text wrap="truncate-end"><Text bold color="error">✕ Model changed</Text><Text color="subtle"> · run /model to choose</Text></Text>
     : first && ask
       ? (
-        <Box gap={1} flexShrink={1}>
-          <Box gap={1} flexShrink={0}>
-            <Avatar els={els} a={first.agent} v={v} />
-            <Text bold wrap="truncate-end">{label(first.agent, v.lanes)}</Text>
-            <Badge els={els} text="Asks you" color="warning" />
-          </Box>
-          <Text wrap="truncate-end">{excerpt(ask.text, 90)}</Text>
+        <Box flexShrink={1}>
+          <Glyph els={els} state="asks" />
+          <Box flexShrink={0} marginRight={2}><Text bold>{label(first.agent, v.lanes)}</Text></Box>
+          <Text wrap="truncate-end">{ask.title ?? firstAsk(ask.text)}</Text>
         </Box>
       )
       : v.setup.length
@@ -617,7 +758,9 @@ export function Alert({ els, v, act }: { els: Els; v: View; act: Actions }) {
   return (
     <Box justifyContent="space-between" gap={2}>
       {body}
-      <Button key="open-redhelm" plain label="Open REDhelm" onPress={act.open} />
+      <Box flexShrink={0}>
+        <Button key="open-redhelm" plain label="Open REDhelm" hover={{ bold: true, scope: 'open-redhelm' }} onPress={act.open} />
+      </Box>
     </Box>
   )
 }

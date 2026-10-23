@@ -3,8 +3,10 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types'
 import { DEFAULTS, LINES, activity, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
+import { headlineInput, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
-import { Alert, Panel, Sheet, type Actions, type Els, type View } from './view'
+import { BUCKET_MS, BUCKETS, DEFAULT_COLOR, isMoving, record, traceRaster } from './trace'
+import { Alert, Panel, Sheet, clockFace, type Actions, type Els, type TraceSpec, type View } from './view'
 
 type $ = EngineInterface
 
@@ -189,7 +191,6 @@ async function sync($: $) {
   }
   const asks = await read($, inbox)
   if (asks.some(m => !answerable(m.agentId))) await update($, inbox, list => list.filter(m => answerable(m.agentId)))
-  if (Object.values(merged).some(a => LIVE.has(a.status))) await update($, now, () => at)
 }
 
 // What agents send you
@@ -216,7 +217,14 @@ async function received($: $, from: string, raw: string) {
     if (answered !== undefined && answered >= at) return
     await update($, inbox, list => [...list, { id: `${from}-${at}`, agentId: from, text, at, ask: true }].slice(-20))
     await note($, { kind: 'ask', text: `${name}: ${excerpt(text, 60)}`, agentId: from })
-    if (cfg.agentToasts) $.ui.toast(`◆ ${name} asks you something`)
+    if (cfg.agentToasts) $.ui.toast(`⚑ ${name} asks you something`)
+    // The card's edge flashes a few times as it arrives: six redraws a quarter second apart.
+    if (cfg.motion === 'on') {
+      for (let k = 1; k <= 6; k++) $.clock.after(k * 250, () => void quietly(async () => {
+        const t = await $.clock.now()
+        await update($, now, () => t)
+      }))
+    }
   } else {
     await patch($, from, () => ({ answer: text }))
     await note($, { kind: 'report', text: `${name}: ${excerpt(text, 60)}`, agentId: from })
@@ -478,6 +486,98 @@ async function takeDraft($: $) {
   return draft
 }
 
+// Motion: traces, the clock in the time columns, and the small model's labels
+
+/** Each agent's tool call times over the last minute: its trace. Visual only; a reload starts it flat. */
+const traces = new Map<string, number[]>()
+/** The Rasters each site drew, by key, with the cells last sent: the frame loop repaints only what changed. */
+const sites = new Map<string, Map<string, TraceSpec>>()
+/** Whether REDhelm is on screen (its pane shown, or the bar above the prompt); checked once a second. */
+let visible = false
+let framing = false
+const labels = labeler()
+/** Cancels label calls in flight when the session ends. */
+let stopLabels = new AbortController()
+
+async function onScreen($: $) {
+  if ((await $.ui.panes()).some(p => p.id === PANE && p.isShown)) return true
+  return (await read($, placement)) === 'bottom' && !(await read($, collapsed))
+}
+
+/** One label from the small model, the way /btw asks a side question: low effort, a few words, six seconds at most. */
+const askHaiku = ($: $): Complete => async ({ system, prompt }) => {
+  const r = await $.model.complete({ model: 'haiku', effort: 'low', maxTokens: 30, timeoutMs: 6000, system, prompt }, { signal: stopLabels.signal })
+  return r.isAnswered ? r.text : undefined
+}
+
+/** Titles for questions first (they are what you read), then headlines for agents at work; written only when they change. */
+async function labelAll($: $) {
+  const at = await $.clock.now()
+  for (const m of await read($, inbox)) {
+    if (m.title || !(m.ask ?? looksLikeQuestion(m.text))) continue
+    const title = await labels.ask(askHaiku($), 'title', m.id, titleInput(m.text), at)
+    if (title) await update($, inbox, list => list.map(x => (x.id === m.id ? { ...x, title } : x)))
+  }
+  for (const a of Object.values(await read($, agents))) {
+    if (a.status !== 'running' || a.waitingOn || !(a.steps?.length || a.brief)) continue
+    const headline = await labels.ask(askHaiku($), 'headline', a.id, headlineInput(a), at)
+    if (headline && headline !== a.headline) await patch($, a.id, () => ({ headline }))
+  }
+}
+
+/** The times last drawn (clockFace). */
+let shownFace = ''
+
+/** Once a second: whether REDhelm is on screen; if so, a time it shows that changed redraws it, and labels are asked for. */
+async function tick($: $) {
+  const was = visible
+  visible = await onScreen($)
+  await pace($)
+  if (!visible) return
+  const at = await $.clock.now()
+  const face = clockFace(Object.values(await read($, agents)), await read($, inbox), at)
+  if (!was || face !== shownFace) {
+    shownFace = face
+    await update($, now, () => at)
+  }
+  if (cfg.labels === 'haiku') void quietly(() => labelAll($))
+}
+
+/** The frame loop runs only while REDhelm is on screen and a trace still moves (the sheet's spans a minute). */
+let frames: { cancel: () => void } | undefined
+async function pace($: $) {
+  const at = await $.clock.now()
+  const moving = [...traces.values()].some(times => times.some(t => at - t < BUCKET_MS * BUCKETS + BUCKET_MS))
+  if (visible && moving && cfg.motion === 'on') frames ??= $.clock.every(125, () => void quietly(() => frame($)))
+  else {
+    frames?.cancel()
+    frames = undefined
+  }
+}
+
+/** Eight times a second: every trace on screen whose cells changed is repainted in place, with no redraw. */
+async function frame($: $) {
+  if (!visible || cfg.motion !== 'on' || framing || !sites.size) return
+  framing = true
+  try {
+    const at = await $.clock.now()
+    for (const [requestId, keys] of sites) {
+      for (const [key, spec] of keys) {
+        const times = traces.get(spec.agentId) ?? []
+        const cells = traceRaster(times, at, spec.cells, spec.rows, isMoving(times, at) ? DEFAULT_COLOR : spec.quiet)
+        if (cells === spec.sent) continue
+        spec.sent = cells
+        const r = (await $.ui.blit({ requestId, key, cells }).catch(() => ({ deny: 'failed' }))) as { deny?: string }
+        // Not drawn there any more (the agent finished, the sheet closed): stop repainting it.
+        if (r.deny) keys.delete(key)
+      }
+      if (!keys.size) sites.delete(requestId)
+    }
+  } finally {
+    framing = false
+  }
+}
+
 // Drawing
 
 /**
@@ -545,11 +645,22 @@ function actions($: $, inPane = false): Actions {
   }
 }
 
-/** The surface's elements; Input only where the surface takes typing (mobile does not). */
-const elements = (table: unknown, surface: string): Els =>
-  surface === 'mobile' ? { ...(table as Els), Input: undefined } : (table as Els)
+/**
+ * The surface's elements: Input only where the surface takes typing (mobile does not), the Raster
+ * only on the terminal and Svg everywhere else. A table names every element on every surface, and
+ * one the surface lacks draws nothing, so the choice is made here, by surface.
+ */
+const elements = (table: unknown, surface: string): Els => {
+  const els = table as Els
+  return surface === 'terminal'
+    ? { ...els, Svg: undefined }
+    : { ...els, Raster: undefined, Input: surface === 'mobile' ? undefined : els.Input }
+}
 
-async function view($: $): Promise<View> {
+async function view($: $, site?: string): Promise<View> {
+  // A site drawn again starts its list of Rasters afresh: the frame loop repaints only what this drawing holds.
+  const mounted = new Map<string, TraceSpec>()
+  if (site) sites.set(site, mounted)
   const list = await read($, spaces)
   const all = Object.values(await read($, agents)).sort((a, b) => a.startedAt - b.startedAt)
   const hs = handles(all)
@@ -573,6 +684,10 @@ async function view($: $): Promise<View> {
     release: await read($, release),
     root,
     lanes: { ...tagged, ...laneNames(list) },
+    traces: Object.fromEntries(traces),
+    at: await $.clock.now(),
+    motion: cfg.motion === 'on',
+    mount: site ? (key, spec) => void mounted.set(key, spec) : undefined,
   }
 }
 
@@ -591,6 +706,12 @@ export const register: Register = (on, options) => {
     if (!active) return next(e)
     hasPython = undefined
     answeredAt.clear()
+    traces.clear()
+    sites.clear()
+    frames?.cancel()
+    frames = undefined
+    visible = false
+    stopLabels = new AbortController()
     shownStatus = null
     root = await $.session.root()
     homeDir = await home($).catch(() => '')
@@ -605,6 +726,7 @@ export const register: Register = (on, options) => {
       $.clock.every(1500, () => void quietly(() => sync($))),
       $.clock.every(5000, () => void quietly(() => refresh($))),
       $.clock.every(CHECK_EVERY, () => void quietly(() => checkRelease($))),
+      $.clock.every(1000, () => void quietly(() => tick($))),
     ]
     $.clock.after(2000, () => void quietly(() => checkRelease($)))
     void quietly(async () => {
@@ -618,6 +740,9 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', ($, e, next) => {
+    stopLabels.abort()
+    frames?.cancel()
+    frames = undefined
     timers.forEach(t => t.cancel())
     timers = []
     return next(e)
@@ -758,6 +883,8 @@ export const register: Register = (on, options) => {
     }
     const input = e as unknown as Record<string, unknown>
     const now = await $.clock.now()
+    traces.set(id, record(traces.get(id) ?? [], now))
+    if (visible && !frames) void quietly(() => pace($))
     await quietly(() => {
       const file = changedFile(e.tool, input)
       const path = file && relative(file, root)
@@ -847,7 +974,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = elements($.ui.resolve(e), e.surface)
-    const v = await view($)
+    const v = await view($, e.requestId)
     const act = actions($, true)
     // An agent's sheet takes the panel's place until Back.
     if (v.inspecting) return <Sheet els={els} v={v} act={act} columns={e.props.bodyColumns} back={() => act.inspect(null)} />
@@ -868,7 +995,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: SHEET }, async ($, e) => (
-    <Sheet els={elements($.ui.resolve(e), e.surface)} v={await view($)} act={actions($)} columns={e.props.bodyColumns} />
+    <Sheet els={elements($.ui.resolve(e), e.surface)} v={await view($, e.requestId)} act={actions($)} columns={e.props.bodyColumns} />
   ))
 
   /** Above the prompt: the whole rack in bottom placement, otherwise only a pulled-out strip. */
@@ -878,7 +1005,7 @@ export const register: Register = (on, options) => {
     const paneShown = await $.ui.panes().then(ps => ps.some(p => p.id === PANE && p.isShown), () => false)
     if (paneShown) return next(e)
     const els = elements($.ui.resolve(e), e.surface)
-    const v = await view($)
+    const v = await view($, e.requestId)
     const act = actions($)
     if ((await read($, placement)) === 'bottom' && !(await read($, collapsed))) {
       return <Panel els={els} v={v} act={act} shape={{ kind: 'wide', columns: e.props.bodyColumns, rows: Math.min(e.props.maxRows, 6), rule: true, classic: e.viewport?.isFullscreen === false }} />

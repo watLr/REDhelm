@@ -60,6 +60,26 @@
       "title": "Pop-ups when agents finish or message you",
       "default": true,
       "description": "Short pop-ups in Claude Code when an agent finishes, fails, or sends you a message."
+    },
+    "motion": {
+      "type": "string",
+      "title": "REDhelm motion",
+      "description": "On: agents' activity traces move and a new question's edge flashes. Off: everything stays still between redraws.",
+      "options": [
+        "on",
+        "off"
+      ],
+      "default": "on"
+    },
+    "labels": {
+      "type": "string",
+      "title": "REDhelm labels",
+      "description": "Haiku: Claude Code's small model writes each working agent's headline and each question's short title (a few short requests while REDhelm is on screen). Plain: REDhelm's own words only.",
+      "options": [
+        "haiku",
+        "plain"
+      ],
+      "default": "haiku"
     }
   }
 }

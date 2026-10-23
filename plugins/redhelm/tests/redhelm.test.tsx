@@ -4,11 +4,13 @@ import type { Agent } from '../types'
 
 /** The test runtime has timers; the hooks environment's declarations leave them out. */
 declare const setTimeout: (fn: () => void, ms: number) => unknown
-import { grouped, tidyPaths, looksLikeQuestion, isNewer,
-  DEFAULTS, activity, doing, handleOf, handles, settings, foldLanes, foldStatusBoard, isStale, kindOf, overlaps, parseRun, parseStandards, phase, remember, short, staleTarget,
+import { grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstAsk, plainHeadline, stateOf,
+  DEFAULTS, activity, handleOf, handles, settings, foldLanes, foldStatusBoard, isStale, kindOf, overlaps, parseRun, parseStandards, phase, remember, short, staleTarget,
 } from '../hooks/model'
 import { workspaces, type Io } from '../hooks/sources'
 import { label, rack, relevant, shortName, summary, type View } from '../hooks/view'
+import { braille, buckets, rasterCells, record } from '../hooks/trace'
+import { clean, labeler, type Complete } from '../hooks/labels'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -157,12 +159,13 @@ const openSheet = async (_$: any, ui: any, id: string, _surface = 'terminal') =>
 /** Beneath REDhelm: the engine's session, spawn and tools answer without running anything. */
 /** The mocked clock of the latest engine(), so a test can move time on. */
 let clock: any
-const engine = (on: any, isInteractive: boolean) => async ($: any) => {
+/** `shown`: Claude Code reports REDhelm's pane on screen, so its clock, traces and labels run. */
+const engine = (on: any, isInteractive: boolean, opts: { shown?: boolean } = {}) => async ($: any) => {
   clock = mock.clock(on)
   mock.store(on)
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
-  on('ui.panes', () => ({ value: [] }))
+  on('ui.panes', () => ({ value: opts.shown ? [{ id: 'redhelm', title: 'REDhelm', isShown: true }] : [] }))
   on('classic.PostModelSwitch', () => ({}))
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => { // Claude Code's own (empty) band
     const { Box } = $.ui.resolve(e)
@@ -186,9 +189,11 @@ describe('the pane', () => {
     for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
       const ui = await $.ui.mount({ ...PANE, surface } as any)
       expect((await ui.find({ key: 'sel-a1' }))?.text).toBe('Docs')
-      expect(await ui.find({ type: 'Text', text: /is writing code/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /^Edit setup\.md$/ })).toBeDefined() // its headline, in plain words until the model writes one
+      // The trace: repainted in place on the terminal, a drawing elsewhere.
+      expect(await ui.find(surface === 'terminal' ? { type: 'Raster', key: 'trace-a1' } : { type: 'Svg' })).toBeDefined()
       const sheet = await openSheet($, ui, 'a1', surface)
-      expect(await sheet.find({ type: 'Text', text: /Asked to/ })).toBeDefined()
+      expect(await sheet.find({ type: 'Text', text: /^Task$/ })).toBeDefined()
       expect(await sheet.find({ type: 'Text', text: /Opus 5\.5/ })).toBeDefined()
       expect(await sheet.find({ type: 'Text', text: /Edit setup\.md/ })).toBeDefined()
       expect(await sheet.find({ key: 'compose-a1' })).toBeDefined() // messaging goes through the prompt, so every surface has it
@@ -202,7 +207,7 @@ describe('the pane', () => {
     await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
     expect(await ui.find({ key: 'sel-a1' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /Agents you start show up here/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /No agents yet/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -211,7 +216,7 @@ describe('the pane', () => {
     await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, placement: 'inline', bodyColumns: 140 } } as any)
     expect((await ui.find({ key: 'sel-a1' }))?.text).toBe('Docs')
-    expect(await ui.find({ type: 'Text', text: /is getting started/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Getting started$/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -249,7 +254,7 @@ describe('the pane', () => {
 describe('the rack', () => {
   test('orders strips by who needs you next and pulls out the ones that do', async () => {
     const v = {
-      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {},
+      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true,
       agents: [
         agent({ id: 'run', startedAt: 1 }),
         agent({ id: 'done', status: 'completed', endedAt: 5 }),
@@ -318,7 +323,8 @@ describe('what REDhelm brings to Claude Code', () => {
 
 describe('your REDhelm settings', () => {
   test('missing or unknown values fall back to the defaults', async () => {
-    expect(settings()).toEqual({ placement: 'right', statusLine: 'off', guard: 'hold', notifyAfter: 120, autoOpen: true, agentToasts: true })
+    expect(settings()).toEqual({ placement: 'right', statusLine: 'off', guard: 'hold', notifyAfter: 120, autoOpen: true, agentToasts: true, motion: 'on', labels: 'haiku' })
+    expect(settings({ motion: 'off', labels: 'plain' })).toMatchObject({ motion: 'off', labels: 'plain' })
     expect(settings({ placement: 'left', notifyAfter: -5, autoOpen: false })).toMatchObject({ placement: 'right', notifyAfter: 120, autoOpen: false })
   })
 
@@ -430,7 +436,7 @@ describe('messaging an agent', () => {
     await clock.advance(100) // REDhelm reads whether it is a question
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect((await ui.find({ key: 'sel-a1' }))?.text).toBe('Docs')
-    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeDefined()
+    expect(await ui.find({ key: 'ask-a1' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Ready to merge\?/ })).toBeDefined()
     await ui.press({ key: 'compose-a1' })
     await new Promise<void>(r => setTimeout(() => r(), 40))
@@ -442,7 +448,7 @@ describe('messaging an agent', () => {
 })
 
 describe('what REDhelm chooses to show', () => {
-  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {} }
+  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true }
 
   test("only this session's workflows, or ones an agent here is changing; finished runs stay quiet", async () => {
     const ws = (dir: string, extra: object) => ({ dir, name: dir.split('/').pop()!, ...extra })
@@ -490,22 +496,23 @@ describe('your draft is never sent to an agent', () => {
     await ui.unmount()
   })
 
-  test("a question's card says what the agent is on and when it asked; its sheet has the steps", async ($: any, on: any) => {
+  test("a question's card says it in a line and when it asked; its sheet has the whole question and the steps", async ($: any, on: any) => {
     on('session.send', () => ({ isDelivered: true }))
     on('agent.list', () => ({ value: [] }))
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'x', description: 'Choose colors for the settings page', subagentType: 'general-purpose', name: 'asker' })
     await $.tool.call({ tool: 'Edit', file_path: 'src/Button.tsx', old_string: 'a', new_string: 'b', agentId: 'a1' })
-    await $.session.send({ to: 'lead', text: 'Should I use blue or green for the save button?', agentId: 'a1' })
+    await $.session.send({ to: 'lead', text: 'The palette is drafted in Button.tsx. Should I use blue or green for the save button? Both pass contrast.', agentId: 'a1' })
     await clock.advance(100) // REDhelm reads whether it is a question
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Choose colors for the settings page/ })).toBeDefined()
+    expect(await ui.find({ key: 'ask-a1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Should I use blue or green for the save button\?$/ })).toBeDefined() // the question, not the preamble
+    expect(await ui.find({ type: 'Text', text: /palette is drafted/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^asks · now$/ })).toBeDefined()
     const sheet = await openSheet($, ui, 'a1')
     expect(await sheet.find({ type: 'Text', text: /Edit Button\.tsx/ })).toBeDefined() // its recent steps
-    expect(await sheet.find({ type: 'Text', text: /Should I use blue or green/ })).toBeDefined()
+    expect(await sheet.find({ type: 'Text', text: /palette is drafted in Button\.tsx\. Should I use blue or green/ })).toBeDefined() // all of it
     await sheet.unmount()
-    expect(await ui.find({ type: 'Text', text: /just now/ })).toBeDefined()
     await ui.unmount()
   })
 })
@@ -534,7 +541,7 @@ describe('two agents with the same name', () => {
 })
 
 describe('waiting is not the same as waiting for you', () => {
-  test('an agent that messaged another agent reads "is waiting for <that agent>", with no card for you', async ($: any, on: any) => {
+  test('an agent that messaged another agent reads "Waiting for <that agent>", with no card for you', async ($: any, on: any) => {
     on('session.send', () => ({ isDelivered: true }))
     on('agent.list', () => ({ value: [{ id: 'a1', name: 'echo', description: 'echo', type: 'general-purpose', status: 'running' }] }))
     await engine(on, true)($)
@@ -542,8 +549,8 @@ describe('waiting is not the same as waiting for you', () => {
     await $.agent.spawn({ prompt: 'x', description: 'asker', subagentType: 'general-purpose', name: 'asker' })
     await $.session.send({ to: 'echo', text: 'are you done?', agentId: 'a2' })
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /is waiting for Echo/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^Waiting for Echo$/ })).toBeDefined()
+    expect(await ui.find({ key: 'ask-a2' })).toBeUndefined()
     await ui.unmount()
   })
 })
@@ -551,10 +558,29 @@ describe('waiting is not the same as waiting for you', () => {
 describe('saying what an agent is doing, truthfully', () => {
   test('an agent with no action for 15 minutes reads as quiet, not as still doing its last thing', async () => {
     const now = 10 * 3600_000
-    const busy = agent({ recent: ['exploring'], steps: [{ text: 'Read a.ts', at: now - 60_000 }] })
-    const quiet = agent({ recent: ['exploring'], steps: [{ text: 'Read a.ts', at: now - 3 * 3600_000 }] })
-    expect(doing(busy, now)).toBe('is reading the code')
-    expect(doing(quiet, now)).toBe('has been quiet for 3 h 0 min')
+    const busy = agent({ activity: 'Read a.ts', steps: [{ text: 'Read a.ts', at: now - 60_000 }] })
+    const quiet = agent({ activity: 'Read a.ts', steps: [{ text: 'Read a.ts', at: now - 3 * 3600_000 }] })
+    expect([stateOf(busy, now), plainHeadline(busy, now)]).toEqual(['working', 'Read a.ts'])
+    expect([stateOf(quiet, now), plainHeadline(quiet, now)]).toEqual(['quiet', 'No action for 3h'])
+  })
+
+  test('each state has its own words, and a question outranks the rest', async () => {
+    expect(plainHeadline(agent({ waitingOn: 'echo' }), 0)).toBe('Waiting for Echo')
+    expect(plainHeadline(agent({ status: 'waiting' }), 0)).toBe('Waiting on work it started')
+    expect(plainHeadline(agent({}), 0)).toBe('Getting started')
+    expect(plainHeadline(agent({ status: 'completed', answer: 'Wrote the guide' }), 0)).toBe('Wrote the guide')
+    expect(plainHeadline(agent({ status: 'killed' }), 0)).toBe('Stopped')
+    expect(stateOf(agent({ status: 'failed' }), 0)).toBe('failed')
+    expect(stateOf(agent({ status: 'running' }), 0, true)).toBe('asks')
+  })
+
+  test('times read in a five-character column', () => {
+    expect([age(0), age(12_000), age(3 * 60_000 + 5_000), age(2 * 3_600_000), age(3 * 86_400_000)]).toEqual(['now', '12s', '3m', '2h', '3d'])
+  })
+
+  test("a question's line is its first sentence that asks", () => {
+    expect(firstAsk('The diff is written. Should I forward it? It is small.')).toBe('Should I forward it?')
+    expect(firstAsk('Approve the migration before I run it')).toBe('Approve the migration before I run it')
   })
 })
 
@@ -576,8 +602,8 @@ describe('agents Claude Code no longer lists', () => {
     await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
     await clock.advance(60_000) // REDhelm checks the list every 1.5 s
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /1 finished/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /working/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^Finished · 1$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^▶ \d+$/ })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -592,17 +618,17 @@ describe('agents Claude Code no longer lists', () => {
     await $.session.send({ to: 'lead', text: 'Which test runner?', agentId: 'a2' })
     await clock.advance(100) // REDhelm reads whether it is a question
     let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /2 needs you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ 2$/ })).toBeDefined()
     await ui.unmount()
     await $.session.send({ to: 'docs', text: 'Green, to match the brand' }) // the main conversation, by name
     ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ 1$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Blue or green/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Which test runner/ })).toBeDefined()
     await ui.unmount()
     await $.session.send({ to: 'a2', text: 'Use the one in package.json' }) // and by id
     ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ \d+$/ })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -617,14 +643,14 @@ describe('agents Claude Code no longer lists', () => {
     listed = [] // finished and dropped from the list: a reply still resumes it
     await clock.advance(60_000)
     let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ 1$/ })).toBeDefined()
     expect(await ui.find({ key: 'dismiss-a1' })).toBeDefined() // ended: Dismiss where Stop was
     expect(await ui.find({ key: 'stop-a1' })).toBeUndefined()
     await ui.unmount()
     await clock.advance(30 * 60_000) // long after it ended, the question has gone stale
     ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /1 finished/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ \d+$/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^Finished · 1$/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -640,7 +666,7 @@ describe('agents Claude Code no longer lists', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'dismiss-a1' })
     await clock.advance(100)
-    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ \d+$/ })).toBeUndefined()
     await ui.unmount()
   })
 })
@@ -695,7 +721,7 @@ describe('an agent still waiting on work it started', () => {
     await $.turn.complete({ answer: 'Read the files; one wait still running', durationMs: 9000, isAborted: false, turnId: 't1', agentId: 'a1', reason: 'answer' })
     await clock.advance(3_000)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /waiting on work it started/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Waiting on work it started$/ })).toBeDefined()
     expect(toasts.some(t => /finished/.test(t))).toBe(false)
     status = 'completed'
     await clock.advance(3_000)
@@ -813,15 +839,15 @@ describe('the agent sheet', () => {
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
-    expect(await ui.find({ type: 'Text', text: /1 working/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^▶ 1$/ })).toBeDefined()
     await ui.press({ key: 'sel-a1' })
     await new Promise<void>(r => setTimeout(() => r(), 40))
-    expect(await ui.find({ type: 'Text', text: /Asked to/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Task$/ })).toBeDefined()
     expect(await ui.find({ key: 'back' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /1 working/ })).toBeUndefined() // the sheet, in place of the list and its counts
+    expect(await ui.find({ type: 'Text', text: /^▶ 1$/ })).toBeUndefined() // the sheet, in place of the list and its counts
     await ui.press({ key: 'back' })
     await new Promise<void>(r => setTimeout(() => r(), 40))
-    expect(await ui.find({ type: 'Text', text: /1 working/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^▶ 1$/ })).toBeDefined()
     expect(await ui.find({ key: 'back' })).toBeUndefined()
     await ui.unmount()
   })
@@ -849,7 +875,7 @@ describe('the agent sheet', () => {
     await band.press({ key: 'sel-a1' })
     await new Promise<void>(r => setTimeout(() => r(), 40))
     const sheet = await $.ui.mount({ ...SHEET, surface: 'terminal' } as any)
-    expect(await sheet.find({ type: 'Text', text: /Asked to/ })).toBeDefined()
+    expect(await sheet.find({ type: 'Text', text: /^Task$/ })).toBeDefined()
     expect(await sheet.find({ type: 'Text', text: /Esc to close/ })).toBeDefined()
     await sheet.unmount()
     await band.unmount()
@@ -859,7 +885,7 @@ describe('the agent sheet', () => {
 describe('what an agent sends you', () => {
   const docs = { id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }
 
-  test('a report is not a question: no "Asks you", and it shows as what the agent last said', async ($: any, on: any) => {
+  test('a report is not a question: no card, and it shows as what the agent last said', async ($: any, on: any) => {
     on('agent.list', () => ({ value: [docs] }))
     on('session.send', () => ({ isDelivered: true }))
     await engine(on, true)($)
@@ -867,11 +893,11 @@ describe('what an agent sends you', () => {
     await $.session.send({ to: 'lead', text: 'The schema diff is written to docs/schema.md', agentId: 'a1' })
     await clock.advance(100)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /needs you/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ \d+$/ })).toBeUndefined()
+    expect(await ui.find({ key: 'ask-a1' })).toBeUndefined()
     const sheet = await openSheet($, ui, 'a1')
     expect(await sheet.find({ type: 'Text', text: /schema diff is written/ })).toBeDefined()
-    expect(await sheet.find({ type: 'Text', text: /Asks you/ })).toBeUndefined()
+    expect(await sheet.find({ type: 'Text', text: /^asks ·/ })).toBeUndefined()
     await sheet.unmount()
     await ui.unmount()
   })
@@ -885,8 +911,8 @@ describe('what an agent sends you', () => {
     await $.session.send({ to: 'lead', text: 'Approve the migration before I run it', agentId: 'a1' })
     await clock.advance(100)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /1 needs you/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Asks you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^⚑ 1$/ })).toBeDefined()
+    expect(await ui.find({ key: 'ask-a1' })).toBeDefined()
     await ui.unmount()
   })
 
@@ -955,6 +981,176 @@ describe('a newer REDhelm', () => {
     expect(isNewer('0.4.5', '0.4.5')).toBe(false)
     expect(isNewer('0.4.4', '0.4.5')).toBe(false)
     expect(isNewer('garbage', '0.4.5')).toBe(false)
+  })
+})
+
+
+describe('traces', () => {
+  test('calls fall into fixed two-second buckets, newest last, and age out after a minute', () => {
+    expect(buckets([0, 100, 2500, 9000], 9999, 5)).toEqual([2, 1, 0, 0, 1])
+    expect(buckets([], 0, 3)).toEqual([0, 0, 0])
+    expect(buckets([5000], 4000, 3)).toEqual([0, 0, 0]) // not yet
+    expect(record([0, 70_000], 70_500)).toEqual([70_000, 70_500])
+  })
+
+  test('braille draws bars on a flat baseline, two buckets a cell', () => {
+    expect(braille([0, 0])).toEqual(['⣀'])
+    expect(braille([4, 4])).toEqual(['⣿'])
+    expect(braille([1, 0])[0]!.codePointAt(0)).toBe(0x2800 | 0x40 | 0x04 | 0x80)
+    expect(braille([0, 0], 2)).toEqual(['⠀', '⣀'])
+    expect(braille([8, 8], 2)).toEqual(['⣿', '⣿'])
+  })
+
+  test('raster cells are base64 of the code point, colour and background of each cell', () => {
+    const b = atob(rasterCells(['⣀'], 0x123456))
+    const u32 = (i: number) => (b.charCodeAt(i) | (b.charCodeAt(i + 1) << 8) | (b.charCodeAt(i + 2) << 16) | (b.charCodeAt(i + 3) << 24)) >>> 0
+    expect([b.length, u32(0), u32(4), u32(8)]).toEqual([12, 0x28c0, 0x123456, 0x01000000])
+  })
+})
+
+describe('labels', () => {
+  test('a reply becomes a short, clean label, or nothing', () => {
+    expect(clean('"Rewriting the setup guide."', 6)).toBe('Rewriting the setup guide')
+    expect(clean('Headline: Fixing the flaky auth tests now and later too', 6)).toBe('Fixing the flaky auth tests now')
+    expect(clean("I can't help with that.", 6)).toBeUndefined()
+    expect(clean('', 6)).toBeUndefined()
+    expect(clean('Add a README section?\nMore text', 8, true)).toBe('Add a README section?')
+  })
+
+  test('one call per input, one at a time, an agent at most every 20 seconds', async () => {
+    const calls: string[] = []
+    let release = () => {}
+    const slow: Complete = async ask => {
+      calls.push(ask.prompt)
+      await new Promise<void>(r => (release = r))
+      return 'Writing the guide'
+    }
+    const l = labeler()
+    const first = l.ask(slow, 'headline', 'a1', 'x', 0)
+    expect(await l.ask(slow, 'headline', 'a2', 'y', 0)).toBeUndefined() // one at a time
+    release()
+    expect(await first).toBe('Writing the guide')
+    expect(await l.ask(slow, 'headline', 'a1', 'x', 1)).toBe('Writing the guide') // the same input: no call
+    expect(await l.ask(slow, 'headline', 'a1', 'z', 5_000)).toBeUndefined() // too soon
+    expect(calls).toEqual(['x'])
+  })
+
+  test('a failed call leaves the plain words and is tried again later', async () => {
+    let n = 0
+    const flaky: Complete = async () => (++n === 1 ? undefined : 'Running the tests')
+    const l = labeler()
+    expect(await l.ask(flaky, 'headline', 'a1', 'x', 0)).toBeUndefined()
+    expect(await l.ask(flaky, 'headline', 'a1', 'x', 21_000)).toBe('Running the tests')
+  })
+})
+
+const spawn = ($: any) => $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+const edit = ($: any) => $.tool.call({ tool: 'Edit', file_path: 'src/guide/setup.md', old_string: 'a', new_string: 'b', agentId: 'a1' })
+
+describe('the live list', () => {
+
+  test('a working row has its glyph, its trace, a time and, on hover, Message and Stop', async ($: any, on: any) => {
+    await engine(on, true)($)
+    await spawn($)
+    await edit($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /^▶ 1$/ })).toBeDefined() // the header count
+    expect(await ui.find({ type: 'Text', text: /^▶$/ })).toBeDefined() // the row's glyph
+    expect((await ui.find({ type: 'Raster', key: 'trace-a1' }))?.props.columns).toBe(8)
+    expect(await ui.find({ key: 'compose-a1' })).toBeDefined()
+    expect((await ui.findAll({ type: 'Box' })).some((b: any) => b.props.display === 'none')).toBe(true) // revealed by the pointer, no hook
+    await ui.unmount()
+  })
+
+  test('in a 22-column sidebar the name and time keep their room and the trace halves', async ($: any, on: any) => {
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'x', subagentType: 'general-purpose', name: 'a very long agent name indeed' })
+    await edit($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 22 } })
+    expect((await ui.find({ key: 'sel-a1' }))?.text).toBe('A ver…')
+    expect((await ui.find({ type: 'Raster', key: 'trace-a1' }))?.props.columns).toBe(4)
+    expect(await ui.find({ type: 'Text', text: /^now$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('with motion off, no Raster: the trace is still text', { options: { motion: 'off' } } as any, async ($: any, on: any) => {
+    await engine(on, true)($)
+    await spawn($)
+    await edit($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^[⠀-⣿]{8}$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('while shown, a moving trace is repainted in place between redraws, and a finished agent is not', async ($: any, on: any) => {
+    const blits: string[] = []
+    let status = 'running'
+    on('ui.blit', (_$: any, e: any) => (blits.push(e.key), { value: {} }))
+    on('agent.list', () => ({ value: [{ id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status }] }))
+    on('turn.complete', () => ({ text: '' }))
+    await engine(on, true, { shown: true })($)
+    await spawn($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await clock.advance(61_100) // on screen, and past its first minute: times change once a minute now
+    await edit($)
+    await clock.advance(2_100) // the trace scrolls a bucket, between redraws
+    expect(blits).toContain('trace-a1')
+    status = 'completed'
+    await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', agentId: 'a1', reason: 'answer' })
+    await clock.advance(300)
+    const after = blits.length
+    await clock.advance(4_000)
+    expect(blits.length).toBe(after) // finished: no trace drawn, nothing repainted
+    await ui.unmount()
+  })
+})
+
+describe('labels from the small model', () => {
+  const docs = { id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }
+  const answer = (text: string) => ({ value: { isAnswered: true, text, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })
+
+  test("while REDhelm is on screen, Haiku writes a working agent's headline and a question's title", async ($: any, on: any) => {
+    const asked: any[] = []
+    on('agent.list', () => ({ value: [docs] }))
+    on('session.send', () => ({ isDelivered: true }))
+    on('model.complete', (_$: any, e: any) => (asked.push(e), answer(/question/.test(e.system) ? '"Use blue or green?"' : 'Rewriting the setup guide.')))
+    await engine(on, true, { shown: true })($)
+    await spawn($)
+    await edit($)
+    await $.session.send({ to: 'lead', text: 'The palette is ready. Should I use blue or green for the save button?', agentId: 'a1' })
+    await clock.advance(100)
+    await clock.advance(1_000)
+    await clock.advance(1_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /^Use blue or green\?$/ })).toBeDefined()
+    expect(asked.every(e => e.model === 'haiku' && e.effort === 'low' && e.maxTokens === 30 && e.timeoutMs === 6000)).toBe(true)
+    await ui.unmount()
+    await $.session.send({ to: 'docs', text: 'Blue' }) // answered: the agent is at work again
+    await clock.advance(1_000)
+    const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await again.find({ type: 'Text', text: /^Rewriting the setup guide$/ })).toBeDefined()
+    await again.unmount()
+  })
+
+  test('labels: plain never calls the model', { options: { labels: 'plain' } } as any, async ($: any, on: any) => {
+    let calls = 0
+    on('model.complete', () => (calls++, answer('x')))
+    await engine(on, true, { shown: true })($)
+    await spawn($)
+    await edit($)
+    await clock.advance(3_000)
+    expect(calls).toBe(0)
+  })
+
+  test('nothing is asked while REDhelm is off screen', async ($: any, on: any) => {
+    let calls = 0
+    on('model.complete', () => (calls++, answer('x')))
+    await engine(on, true)($)
+    await spawn($)
+    await edit($)
+    await clock.advance(3_000)
+    expect(calls).toBe(0)
   })
 })
 

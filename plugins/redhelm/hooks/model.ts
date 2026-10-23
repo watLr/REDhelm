@@ -9,6 +9,10 @@ export type Settings = {
   notifyAfter: number
   autoOpen: boolean
   agentToasts: boolean
+  /** Traces that move and a question's edge that flashes; off, everything stays still between redraws. */
+  motion: 'on' | 'off'
+  /** Headlines and question titles from the small model, or REDhelm's plain words only. */
+  labels: 'haiku' | 'plain'
 }
 
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T) =>
@@ -21,6 +25,8 @@ export const settings = (o: Record<string, unknown> = {}): Settings => ({
   notifyAfter: typeof o.notifyAfter === 'number' && o.notifyAfter >= 0 ? o.notifyAfter : 120,
   autoOpen: o.autoOpen !== false,
   agentToasts: o.agentToasts !== false,
+  motion: pick(o.motion, ['on', 'off'] as const, 'on'),
+  labels: pick(o.labels, ['haiku', 'plain'] as const, 'haiku'),
 })
 
 // Models: the same rules as ~/.claude/model-guard/mg_common.py
@@ -87,30 +93,57 @@ export const LINES = [
   { key: 'subagentStatusLine', script: 'agents.py', label: "Show each agent's model and effort in Claude Code's agent panel" },
 ] as const
 
-// Plain words: REDhelm speaks in sentences, not codes
+// States and plain words: a glyph says what state an agent is in, a few words what it is on
 
-const PHRASE: Record<Phase, string> = {
-  exploring: 'is reading the code',
-  building: 'is writing code',
-  checking: 'is running checks',
-  delegating: 'is handing off work',
-}
-
-/** "is writing code", "is waiting for Echo", "finished", ... */
+/** Live, but no action for this long: quiet. */
 const QUIET_MS = 15 * 60_000
 
-export const doing = (a: Agent, now?: number) => {
+export type State = 'working' | 'quiet' | 'waiting' | 'asks' | 'done' | 'failed'
+
+/** An agent's state: `asks` when it has a question for you, else from its status and its last action. */
+export function stateOf(a: Agent, now: number, asks = false): State {
+  if (asks) return 'asks'
+  if (a.status === 'completed') return 'done'
+  if (a.status === 'failed' || a.status === 'killed') return 'failed'
+  if (a.waitingOn || a.status === 'waiting') return 'waiting'
   const last = a.steps?.[0]?.at
-  const live = a.status === 'running' || a.status === 'waiting' || a.status === 'pending'
-  // An old last action is not what it is doing now: say it has been quiet, and for how long.
-  if (now && last && live && !a.waitingOn && now - last > QUIET_MS) return `has been quiet for ${minutes(now - last)}`
-  return a.waitingOn && (a.status === 'running' || a.status === 'waiting') ? `is waiting for ${capital(a.waitingOn)}`
-  : a.status === 'waiting' ? 'is waiting on work it started'
-  : a.status === 'completed' ? 'finished'
-  : a.status === 'failed' ? 'failed'
-  : a.status === 'killed' ? 'was stopped'
-  : a.status === 'idle' ? 'is idle'
-  : (phase(a.recent) && PHRASE[phase(a.recent)!]) || 'is getting started'
+  if (a.status === 'idle' || (last !== undefined && now - last > QUIET_MS)) return 'quiet'
+  return 'working'
+}
+
+/** "now", "12s", "3m", "1h", "2d": a time column, never wider than five. */
+export const age = (ms: number) => {
+  const s = Math.floor(Math.max(0, ms) / 1000)
+  if (s < 5) return 'now'
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86_400)}d`
+}
+
+/** What an agent is on, in plain words: its current action, what it waits on, or its last words once it ended. */
+export function plainHeadline(a: Agent, now: number): string {
+  const state = stateOf(a, now)
+  if (state === 'waiting') return a.waitingOn ? `Waiting for ${capital(a.waitingOn)}` : 'Waiting on work it started'
+  if (state === 'quiet') {
+    const last = a.steps?.[0]?.at
+    return last === undefined ? 'Idle' : `No action for ${age(now - last)}`
+  }
+  if (state === 'done' || state === 'failed') {
+    return excerpt(a.answer, 120) || (a.status === 'killed' ? 'Stopped' : state === 'failed' ? 'Failed' : 'Finished')
+  }
+  return a.activity || a.steps?.[0]?.text || 'Getting started'
+}
+
+/** The model's headline while the agent works; the plain words in every other state, and until one arrives. */
+export const headlineOf = (a: Agent, now: number) =>
+  (stateOf(a, now) === 'working' && a.headline) || plainHeadline(a, now)
+
+/** A question in a line: its first sentence that asks, else its first sentence. */
+export function firstAsk(text: string, size = 90) {
+  const line = excerpt(text, 2000)
+  const sentences = line.match(/[^.?!]+[.?!]*/g)?.map(x => x.trim()).filter(Boolean) ?? [line]
+  return excerpt(sentences.find(x => x.endsWith('?')) ?? sentences[0] ?? line, size)
 }
 
 const EFFORT: Record<string, string> = { low: 'low', medium: 'medium', high: 'high', xhigh: 'extra-high', max: 'maximum' }
@@ -118,13 +151,6 @@ const EFFORT: Record<string, string> = { low: 'low', medium: 'medium', high: 'hi
 /** "Opus 5.5 · extra-high effort" */
 export const modelWords = (model?: string, effort?: string) =>
   [short(model), effort && `${EFFORT[effort] ?? effort} effort`].filter(Boolean).join(' · ')
-
-/** "9 min", "2 h 5 min", "just now" */
-export const minutes = (ms: number) => {
-  const m = Math.floor(Math.max(0, ms) / 60000)
-  if (m < 1) return 'just now'
-  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`
-}
 
 export const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 

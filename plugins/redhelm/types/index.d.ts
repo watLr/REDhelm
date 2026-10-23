@@ -32,6 +32,8 @@ export type Agent = {
   endedAt?: number
   /** First meaningful line of its final answer. */
   answer?: string
+  /** What it is doing, in six words or fewer, from the small model; the plain words show without it. */
+  headline?: string
 }
 
 export type Phase = 'exploring' | 'building' | 'checking' | 'delegating'
@@ -40,9 +42,11 @@ export type NoteKind = 'spawn' | 'done' | 'fail' | 'ask' | 'report' | 'reply' | 
 
 export type Note = { at: number; kind: NoteKind; text: string; agentId?: string }
 
-/** A message an agent addressed to the lead (you). */
-/** What an agent sent you. `ask`: it waits on an answer (absent on messages kept from before REDhelm told them apart). */
-export type Message = { id: string; agentId: string; text: string; at: number; ask?: boolean }
+/**
+ * What an agent sent you. `ask`: it waits on an answer (absent on messages kept from before REDhelm told
+ * them apart). `title`: the question in eight words or fewer, from the small model.
+ */
+export type Message = { id: string; agentId: string; text: string; at: number; ask?: boolean; title?: string }
 
 /** A newer REDhelm than the one installed, and how updating it went. */
 export type Release = { id: string; installed: string; latest: string; state?: 'updating' | 'updated' | 'failed'; detail?: string }
