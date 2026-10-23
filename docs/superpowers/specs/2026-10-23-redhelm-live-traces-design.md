@@ -209,3 +209,10 @@ Found on the live render and kept:
   bar to full hue at the newest), and a spectrum line under the header, each working
   agent's share of the last minute's tool calls. The amber `Asks you` pill returns on
   question cards (34 columns and up) and in the bar.
+- **Background (0.7.0, chosen from four concepts rendered live).** The docked terminal sidebar
+  draws a pane-sized Raster behind everything (`hooks/backdrop.ts`): black with a `+` lattice;
+  each tool call sends a ring through it in the agent's hue from its segment of the activity
+  line. Rows, the header and loose lines sit on plates of the field colour (text inside a
+  coloured Box takes its colour; bare text paints the pane's grey). Options: ripples (default),
+  lattice, field (value-noise clouds through an ASCII ramp), ember, none. Rings repaint at
+  8 fps for 2.4 s after a call; field and ember at 4 fps; still backdrops are drawn once.

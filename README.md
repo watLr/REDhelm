@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, two are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.6.2).** Covered by tests and checked with real agents:
+> **Status: early release (0.7.0).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -21,6 +21,11 @@ work is landing, and which one needs you — and know which model is actually an
   tail: full colour at the newest call, fading to grey into the past. Under REDhelm's
   name, a thin line in the same colours shows each working agent's share of the last
   minute's tool calls, so the busiest one is the longest.
+- **A live background.** In the sidebar, REDhelm sits on black with a quiet grid of `+`
+  signs. Each tool call sends a ring through the grid in its agent's colour, from its
+  place on the activity line. Rows sit on plates of the background's colour, so text
+  never lands on the pattern. The **Background** setting also offers a still grid, drifting
+  ASCII clouds (the way an ASCII video renderer draws), a slow red glow, or none.
 - **States at a glance.** `▶` working · `▷` quiet (no action for 15 minutes) · `◆`
   waiting on another agent or on work it started · `⚑` asks you · `✓` finished · `✕`
   failed or stopped. The header counts them: `⚑ 1  ▶ 2  ✓ 1`.
@@ -118,6 +123,7 @@ Every option is a row in `/config`, per user:
 | Pop-ups when agents finish or message you | on · off | on |
 | Motion: traces move, a new question's edge flashes | on · off | on |
 | Labels: headlines and question titles | haiku · plain | haiku |
+| Background (sidebar, terminal) | ripples · lattice · field · ember · none | ripples |
 
 ## Privacy
 

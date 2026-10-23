@@ -1,6 +1,6 @@
 {
   "name": "redhelm",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Live sidebar for your agents: what they do, where their work lands, what needs you, and your workflows.",
   "author": {
     "name": "watLr",
@@ -80,6 +80,19 @@
         "plain"
       ],
       "default": "haiku"
+    },
+    "backdrop": {
+      "type": "string",
+      "title": "REDhelm background",
+      "description": "What the sidebar draws behind your agents (terminal). Ripples: a grid of + signs; each tool call sends a ring through it in the agent's colour. Lattice: the grid alone, still. Field: drifting clouds of ASCII. Ember: a slow red glow. None: the pane's own colour.",
+      "options": [
+        "ripples",
+        "lattice",
+        "field",
+        "ember",
+        "none"
+      ],
+      "default": "ripples"
     }
   }
 }

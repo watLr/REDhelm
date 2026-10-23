@@ -72,7 +72,7 @@ function base64(b: readonly number[]) {
  * What a Raster's `cells` takes: per cell, its code point, foreground and background as little-endian
  * u32s, in base64. `fg`: one colour, or one per column.
  */
-export function rasterCells(lines: readonly string[], fg: number | readonly number[] = DEFAULT_COLOR): string {
+export function rasterCells(lines: readonly string[], fg: number | readonly number[] = DEFAULT_COLOR, bg = DEFAULT_COLOR): string {
   const bytes: number[] = []
   const word = (w: number) => bytes.push(w & 255, (w >>> 8) & 255, (w >>> 16) & 255, (w >>> 24) & 255)
   for (const line of lines) {
@@ -80,7 +80,7 @@ export function rasterCells(lines: readonly string[], fg: number | readonly numb
     for (const ch of line) {
       word(ch.codePointAt(0)!)
       word(typeof fg === 'number' ? fg : fg[i] ?? DEFAULT_COLOR)
-      word(DEFAULT_COLOR)
+      word(bg)
       i++
     }
   }
@@ -102,8 +102,8 @@ export const tail = (color: number, grey: number, cells: number) =>
   Array.from({ length: cells }, (_, i) => mix(grey, color, 0.3 + 0.7 * (cells > 1 ? i / (cells - 1) : 1)))
 
 /** One agent's trace, `cells` wide and `rows` tall, as Raster cells at `now`. */
-export const traceRaster = (times: readonly number[], now: number, cells: number, rows: number, fg: number | readonly number[]) =>
-  rasterCells(bars(buckets(times, now, cells), rows), fg)
+export const traceRaster = (times: readonly number[], now: number, cells: number, rows: number, fg: number | readonly number[], bg?: number) =>
+  rasterCells(bars(buckets(times, now, cells), rows), fg, bg)
 
 /**
  * Who is busiest: each agent's share of the tool calls in the last minute, as whole cells of a line

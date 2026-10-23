@@ -38,7 +38,7 @@ export type Actions = {
 }
 
 /** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colours moving and flat, the cells it holds. */
-export type TraceSpec = { agentId: string; cells: number; rows: number; moving: number[]; quiet: number; sent?: string }
+export type TraceSpec = { agentId: string; cells: number; rows: number; moving: number[]; quiet: number; bg?: number; sent?: string }
 
 export type View = {
   now: number
@@ -68,6 +68,11 @@ export type View = {
   motion: boolean
   /** Told of every Raster drawn, so the frame loop repaints it. */
   mount?: (key: string, spec: TraceSpec) => void
+  /**
+   * The backdrop's colour, when REDhelm draws one: rows, the header and loose lines sit on plates of
+   * it, so text never lands on the pattern. Absent, the pane's own colour shows.
+   */
+  field?: string
 }
 
 // Tokens: surfaces follow the theme; meaning colours are the theme's own keys
@@ -194,8 +199,10 @@ function Trace({ els, v, a, k, cells, rows = 1 }: { els: Els; v: View; a: Agent;
   const moving = isMoving(times, v.at)
   if (Raster && v.motion) {
     const comet = tail(rgb(hue(a.id)), t.quiet, cells)
-    const drawn = rasterCells(bars(counts, rows), moving ? comet : t.quiet)
-    v.mount?.(k, { agentId: a.id, cells, rows, moving: comet, quiet: t.quiet, sent: drawn })
+    // On the backdrop's colour, so the trace sits on its row's plate.
+    const bg = v.field ? rgb(v.field) : undefined
+    const drawn = rasterCells(bars(counts, rows), moving ? comet : t.quiet, bg)
+    v.mount?.(k, { agentId: a.id, cells, rows, moving: comet, quiet: t.quiet, bg, sent: drawn })
     return <Box width={cells} flexShrink={0}><Raster key={k} columns={cells} rows={rows} cells={drawn} /></Box>
   }
   if (Svg) {
@@ -269,7 +276,7 @@ function Row({ els, s, v, act, columns, cells }: { els: Els; s: Strip; v: View; 
   // stripe and its gap 2, glyph 2, trace and its gap, time 6, gap and › 2
   const room = columns - 2 - 2 - (cells + 1) - 6 - 2 - (older ? 2 : 0)
   return (
-    <Box key={scope} position="relative" hover={{ backgroundColor: tone(v).hover, scope }}>
+    <Box key={scope} position="relative" backgroundColor={v.field} hover={{ backgroundColor: tone(v).hover, scope }}>
       {/* Its colour, down both lines: how you tell agents apart at a glance. Finished agents go grey. */}
       <Box width={1} flexShrink={0} backgroundColor={ended ? tone(v).chip : hue(a.id)} />
       <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingLeft={1}>
@@ -346,7 +353,7 @@ function Finished({ els, v, act, strips, columns, cells }: { els: Els; v: View; 
   const { Box, Text, Button } = els
   if (!strips.length) return null
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" backgroundColor={v.field}>
       <Box justifyContent="space-between" gap={2}>
         <Text color="subtle">{`Finished · ${strips.length}`}</Text>
         <Button key="toggle-done" plain dimColor label={v.showDone ? 'Hide' : 'Show'} hover={{ bold: true, scope: 'toggle-done' }} onPress={act.toggleDone} />
@@ -644,14 +651,16 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
   const working = strips.filter(s => !s.cocked && LIVE.has(s.agent.status))
   const done = strips.filter(s => !s.cocked && !LIVE.has(s.agent.status))
   const cells = columns < 30 ? 4 : 8
+  // A plate of the backdrop's colour under a loose line, so its text never lands on the pattern.
+  const plate = (child: any) => (v.field ? <Box backgroundColor={v.field} flexDirection="column">{child}</Box> : child)
   return (
     <Box flexDirection="column" gap={1} width={columns}>
-      <Box flexDirection="column">
+      <Box flexDirection="column" backgroundColor={v.field}>
         <Header els={els} v={v} />
         <Spectrum els={els} v={v} width={columns} />
       </Box>
-      {classic && <NoClicks els={els} />}
-      <Composer els={els} v={v} act={act} />
+      {classic && plate(<NoClicks els={els} />)}
+      {v.composing && plate(<Composer els={els} v={v} act={act} />)}
       <ModelNotice els={els} v={v} />
       <SetupCard els={els} v={v} act={act} />
       {needs.map(s => <QuestionCard key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} columns={columns} />)}
@@ -661,9 +670,28 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
         </Box>
       )}
       <Finished els={els} v={v} act={act} strips={done} columns={columns} cells={cells} />
-      <Overlaps els={els} v={v} />
+      {overlaps(v.agents).length > 0 && plate(<Overlaps els={els} v={v} />)}
       <Workflows els={els} v={v} />
-      <Update els={els} v={v} act={act} />
+      {v.release && plate(<Update els={els} v={v} act={act} />)}
+    </Box>
+  )
+}
+
+/**
+ * The backdrop behind REDhelm: a Raster the size of the pane, drawn first so everything else sits on
+ * top, and a floor of its colour so a short panel or a sheet never shows the pane's own grey.
+ */
+export function Backdropped({ els, v, backdrop, columns, rows, children }: { els: Els; v: View; backdrop?: string; columns: number; rows: number; children: any }) {
+  const { Box, Raster } = els
+  if (!v.field) return <Box flexDirection="column">{children}</Box>
+  return (
+    <Box flexDirection="column" position="relative" width={columns} minHeight={rows} backgroundColor={v.field}>
+      {backdrop && Raster && (
+        <Box position="absolute" top={0} left={0}>
+          <Raster key="backdrop" columns={columns} rows={rows} cells={backdrop} />
+        </Box>
+      )}
+      {children}
     </Box>
   )
 }

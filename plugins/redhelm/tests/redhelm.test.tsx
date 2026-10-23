@@ -11,6 +11,7 @@ import { workspaces, type Io } from '../hooks/sources'
 import { label, rack, relevant, shortName, summary, type View } from '../hooks/view'
 import { bars, buckets, mix, rasterCells, record, spectrum, tail } from '../hooks/trace'
 import { clean, labeler, type Complete } from '../hooks/labels'
+import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -326,7 +327,7 @@ describe('what REDhelm brings to Claude Code', () => {
 
 describe('your REDhelm settings', () => {
   test('missing or unknown values fall back to the defaults', async () => {
-    expect(settings()).toEqual({ placement: 'right', statusLine: 'off', guard: 'hold', notifyAfter: 120, autoOpen: true, agentToasts: true, motion: 'on', labels: 'haiku' })
+    expect(settings()).toEqual({ placement: 'right', statusLine: 'off', guard: 'hold', notifyAfter: 120, autoOpen: true, agentToasts: true, motion: 'on', labels: 'haiku', backdrop: 'ripples' })
     expect(settings({ motion: 'off', labels: 'plain' })).toMatchObject({ motion: 'off', labels: 'plain' })
     expect(settings({ placement: 'left', notifyAfter: -5, autoOpen: false })).toMatchObject({ placement: 'right', notifyAfter: 120, autoOpen: false })
   })
@@ -1028,6 +1029,74 @@ describe('colour', () => {
   })
 })
 
+describe('the backdrop', () => {
+  /** Cell `i` of Raster cells: its character and colour. */
+  const cell = (cells: string, i: number) => {
+    const b = atob(cells)
+    const u32 = (o: number) => (b.charCodeAt(o) | (b.charCodeAt(o + 1) << 8) | (b.charCodeAt(o + 2) << 16) | (b.charCodeAt(o + 3) << 24)) >>> 0
+    return { ch: String.fromCodePoint(u32(i * 12)), fg: u32(i * 12 + 4), bg: u32(i * 12 + 8) }
+  }
+
+  test('the lattice is a + every fourth column, every other row, on black', () => {
+    const cells = drawBackdrop('lattice', 8, 4, 0, PALETTES.dark)
+    expect(atob(cells).length).toBe(8 * 4 * 12)
+    expect(cell(cells, 1 * 8 + 2)).toEqual({ ch: '+', fg: PALETTES.dark.lattice, bg: 0 })
+    expect(cell(cells, 0).ch).toBe(' ')
+    expect(isLattice(6, 3)).toBe(true)
+  })
+
+  test("a tool call's ring lights the lattice in its agent's colour as it passes, then is gone", () => {
+    const ring = [{ x: 0, y: 1, at: 0, color: 0x4f8ff7 }]
+    const lit = drawBackdrop('ripples', 40, 12, 0.3, PALETTES.dark, 0, ring) // radius 6 at 0.3 s
+    expect(cell(lit, 1 * 40 + 6).fg).not.toBe(PALETTES.dark.lattice)
+    expect(cell(lit, 1 * 40 + 38).fg).toBe(PALETTES.dark.lattice) // not reached yet
+    expect(drawBackdrop('ripples', 40, 12, 5, PALETTES.dark, 0, ring)).toBe(drawBackdrop('lattice', 40, 12, 5, PALETTES.dark))
+    expect([animates('ripples', ring, 1), animates('ripples', ring, 3), animates('lattice', ring, 1), animates('field', [], 9)]).toEqual([true, false, false, true])
+  })
+
+  test('the field and the ember move with time', () => {
+    expect(drawBackdrop('field', 30, 10, 0, PALETTES.dark)).not.toBe(drawBackdrop('field', 30, 10, 2, PALETTES.dark))
+    expect(drawBackdrop('ember', 30, 10, 0, PALETTES.dark)).not.toBe(drawBackdrop('ember', 30, 10, 2, PALETTES.dark))
+  })
+
+  test('the docked sidebar draws it behind everything, the size of the pane, with rows on plates of its colour', async ($: any, on: any) => {
+    await engine(on, true)($)
+    await spawn($)
+    await edit($)
+    const props = { ...PANE.props, scroll: { offset: 0, bodyRows: 30 } }
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props })
+    const field = await ui.find({ type: 'Raster', key: 'backdrop' })
+    expect([field?.props.columns, field?.props.rows]).toEqual([48, 30])
+    expect((await ui.find({ key: 'row-a1' }))?.props.backgroundColor).toBe('#000000') // its plate
+    await ui.unmount()
+    for (const other of [{ surface: 'desktop', props }, { surface: 'terminal', props: { ...props, placement: 'inline', bodyColumns: 140 } }]) {
+      const elsewhere = await $.ui.mount({ ...PANE, ...other })
+      expect(await elsewhere.find({ type: 'Raster', key: 'backdrop' })).toBeUndefined()
+      await elsewhere.unmount()
+    }
+  })
+
+  test('an open sheet sits on the backdrop colour, without the pattern', async ($: any, on: any) => {
+    await engine(on, true)($)
+    await spawn($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const sheet = await openSheet($, ui, 'a1')
+    expect(await sheet.find({ type: 'Raster', key: 'backdrop' })).toBeUndefined()
+    expect((await sheet.findAll({ type: 'Box' })).some((b: any) => b.props.backgroundColor === '#000000')).toBe(true)
+    await sheet.unmount()
+    await ui.unmount()
+  })
+
+  test('background: none leaves the pane as it was', { options: { backdrop: 'none' } } as any, async ($: any, on: any) => {
+    await engine(on, true)($)
+    await spawn($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Raster', key: 'backdrop' })).toBeUndefined()
+    expect((await ui.find({ key: 'row-a1' }))?.props.backgroundColor).toBeUndefined()
+    await ui.unmount()
+  })
+})
+
 describe('labels', () => {
   test('a reply becomes a short, clean label, or nothing', () => {
     expect(clean('"Rewriting the setup guide."', 6)).toBe('Rewriting the setup guide')
@@ -1105,7 +1174,7 @@ describe('the live list', () => {
     await spawn($)
     await edit($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+    expect(await ui.find({ type: 'Raster', key: 'trace-a1' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^[▁-█]{8}$/ })).toBeDefined()
     await ui.unmount()
   })

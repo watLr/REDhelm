@@ -5,8 +5,9 @@ import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types
 import { DEFAULTS, LINES, activity, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
-import { BUCKET_MS, BUCKETS, isMoving, record, traceRaster } from './trace'
-import { Alert, Panel, Sheet, clockFace, type Actions, type Els, type TraceSpec, type View } from './view'
+import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
+import { BUCKET_MS, BUCKETS, isMoving, record, spectrum, traceRaster } from './trace'
+import { Alert, Backdropped, Panel, Sheet, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
 
 type $ = EngineInterface
 
@@ -560,7 +561,7 @@ async function tick($: $) {
 let frames: { cancel: () => void } | undefined
 async function pace($: $) {
   const at = await $.clock.now()
-  const moving = [...traces.values()].some(times => times.some(t => at - t < BUCKET_MS * BUCKETS + BUCKET_MS))
+  const moving = [...traces.values()].some(times => times.some(t => at - t < BUCKET_MS * BUCKETS + BUCKET_MS)) || backdropMoves(at)
   if (visible && moving && cfg.motion === 'on') frames ??= $.clock.every(125, () => void quietly(() => frame($)))
   else {
     frames?.cancel()
@@ -570,14 +571,25 @@ async function pace($: $) {
 
 /** Eight times a second: every trace on screen whose cells changed is repainted in place, with no redraw. */
 async function frame($: $) {
-  if (!visible || cfg.motion !== 'on' || framing || !sites.size) return
+  if (!visible || cfg.motion !== 'on' || framing || (!sites.size && !backdropSite)) return
   framing = true
   try {
     const at = await $.clock.now()
+    frameCount++
+    // The backdrop: rings at eight frames a second; the field and the ember at four.
+    const site = backdropSite
+    if (site && backdropMoves(at) && (cfg.backdrop === 'ripples' || frameCount % 2 === 0)) {
+      const cells = await backdropCells($, at, site.columns, site.rows)
+      if (cells !== site.sent) {
+        site.sent = cells
+        const r = (await $.ui.blit({ requestId: site.requestId, key: 'backdrop', cells }).catch(() => ({ deny: 'failed' }))) as { deny?: string }
+        if (r.deny && backdropSite === site) backdropSite = undefined
+      }
+    }
     for (const [requestId, keys] of sites) {
       for (const [key, spec] of keys) {
         const times = traces.get(spec.agentId) ?? []
-        const cells = traceRaster(times, at, spec.cells, spec.rows, isMoving(times, at) ? spec.moving : spec.quiet)
+        const cells = traceRaster(times, at, spec.cells, spec.rows, isMoving(times, at) ? spec.moving : spec.quiet, spec.bg)
         if (cells === spec.sent) continue
         spec.sent = cells
         const r = (await $.ui.blit({ requestId, key, cells }).catch(() => ({ deny: 'failed' }))) as { deny?: string }
@@ -589,6 +601,53 @@ async function frame($: $) {
   } finally {
     framing = false
   }
+}
+
+// The backdrop behind the sidebar
+
+/** Tool calls, newest last: each sends a ring through the backdrop from its agent's place on the activity line. */
+const ripples: { agentId: string; at: number }[] = []
+/** The backdrop the pane last drew, and the cells it holds: the frame loop repaints it while it moves. */
+let backdropSite: { requestId: string; columns: number; rows: number; sent?: string } | undefined
+let frameCount = 0
+
+const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`
+
+/** Whether the backdrop changes now: the field and the ember always; ripples while a ring (and its last frame) is in flight. */
+const backdropMoves = (at: number) =>
+  !!backdropSite && cfg.motion === 'on' &&
+  animates(cfg.backdrop, ripples.map(r => ({ x: 0, y: 0, color: 0, at: r.at / 1000 })), at / 1000 - 0.3)
+
+/** A still backdrop (the lattice, ripples between rings, anything with motion off), drawn once and reused. */
+let stillCells: { key: string; cells: string } | undefined
+
+/** One frame of the backdrop. Rings start where their agent sits on the activity line under REDhelm's name. */
+async function backdropCells($: $, at: number, columns: number, rows: number) {
+  if (!backdropMoves(at) && cfg.backdrop !== 'field' && cfg.backdrop !== 'ember' || cfg.motion !== 'on') {
+    const key = `${cfg.backdrop}|${cfg.motion}|${theme}|${columns}x${rows}`
+    if (stillCells?.key !== key) stillCells = { key, cells: await drawBackdrop($, at, columns, rows) }
+    return stillCells.cells
+  }
+  return drawBackdrop($, at, columns, rows)
+}
+
+async function drawBackdrop($: $, at: number, columns: number, rows: number) {
+  const all = Object.values(await read($, agents))
+  const live = new Set(all.filter(a => LIVE.has(a.status)).map(a => a.id))
+  const parts = spectrum(Object.fromEntries([...traces].filter(([id]) => live.has(id))), at, columns)
+  const centre: Record<string, number> = {}
+  let x = 0
+  for (const p of parts) {
+    centre[p.id] = x + p.cells / 2
+    x += p.cells
+  }
+  const rings: Ripple[] = ripples
+    .filter(r => at - r.at < RIPPLE_S * 1000 && centre[r.agentId] !== undefined)
+    .map(r => ({ x: centre[r.agentId]!, y: 1, at: r.at / 1000, color: parseInt(hue(r.agentId).slice(1), 16) }))
+  const calls = [...traces.values()].reduce((n, times) => n + times.filter(t => at - t < 60_000).length, 0)
+  // Motion off: the same picture, held still.
+  const still = cfg.motion !== 'on'
+  return backdrop(cfg.backdrop, columns, rows, still ? 0 : at / 1000, PALETTES[theme], Math.min(1, calls / 40), still ? [] : rings)
 }
 
 // Drawing
@@ -721,6 +780,8 @@ export const register: Register = (on, options) => {
     answeredAt.clear()
     traces.clear()
     sites.clear()
+    ripples.length = 0
+    backdropSite = undefined
     frames?.cancel()
     frames = undefined
     visible = false
@@ -898,6 +959,8 @@ export const register: Register = (on, options) => {
     const input = e as unknown as Record<string, unknown>
     const now = await $.clock.now()
     traces.set(id, record(traces.get(id) ?? [], now))
+    ripples.push({ agentId: id, at: now })
+    if (ripples.length > 40) ripples.splice(0, ripples.length - 40)
     if (visible && !frames) void quietly(() => pace($))
     await quietly(() => {
       const file = changedFile(e.tool, input)
@@ -990,14 +1053,28 @@ export const register: Register = (on, options) => {
     const els = elements($.ui.resolve(e), e.surface)
     const v = await view($, e.requestId)
     const act = actions($, true)
-    // An agent's sheet takes the panel's place until Back.
-    if (v.inspecting) return <Sheet els={els} v={v} act={act} columns={e.props.bodyColumns} back={() => act.inspect(null)} />
-    return <Panel
-      els={els}
-      v={v}
-      act={act}
-      shape={{ kind: e.props.placement === 'dock' ? 'tall' : 'wide', columns: e.props.bodyColumns, rows: e.viewport?.rows ?? 12, classic: e.surface === 'terminal' && e.viewport?.isFullscreen === false }}
-    />
+    const columns = e.props.bodyColumns
+    const rows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
+    // The backdrop: the docked sidebar on the terminal, where a Raster can fill the pane.
+    const fielded = e.surface === 'terminal' && e.props.placement === 'dock' && cfg.backdrop !== 'none'
+    if (fielded) v.field = hex(PALETTES[theme].bg)
+    // An agent's sheet takes the panel's place until Back: on the backdrop's colour, without its pattern.
+    if (v.inspecting) {
+      backdropSite = undefined
+      return <Backdropped els={els} v={v} columns={columns} rows={rows}><Sheet els={els} v={v} act={act} columns={columns} back={() => act.inspect(null)} /></Backdropped>
+    }
+    const cells = fielded ? await backdropCells($, await $.clock.now(), columns, rows) : undefined
+    backdropSite = fielded ? { requestId: e.requestId, columns, rows, sent: cells } : undefined
+    return (
+      <Backdropped els={els} v={v} backdrop={cells} columns={columns} rows={rows}>
+        <Panel
+          els={els}
+          v={v}
+          act={act}
+          shape={{ kind: e.props.placement === 'dock' ? 'tall' : 'wide', columns, rows: e.viewport?.rows ?? 12, classic: e.surface === 'terminal' && e.viewport?.isFullscreen === false }}
+        />
+      </Backdropped>
+    )
   })
 
   /** The sheet closed by the person (Esc, its ✕) or by REDhelm: no agent is open any more, so its Details comes back. */

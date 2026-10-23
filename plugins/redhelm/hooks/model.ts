@@ -13,6 +13,8 @@ export type Settings = {
   motion: 'on' | 'off'
   /** Headlines and question titles from the small model, or REDhelm's plain words only. */
   labels: 'haiku' | 'plain'
+  /** What REDhelm draws behind itself in the sidebar (terminal): see hooks/backdrop.ts. */
+  backdrop: 'ripples' | 'lattice' | 'field' | 'ember' | 'none'
 }
 
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T) =>
@@ -27,6 +29,7 @@ export const settings = (o: Record<string, unknown> = {}): Settings => ({
   agentToasts: o.agentToasts !== false,
   motion: pick(o.motion, ['on', 'off'] as const, 'on'),
   labels: pick(o.labels, ['haiku', 'plain'] as const, 'haiku'),
+  backdrop: pick(o.backdrop, ['ripples', 'lattice', 'field', 'ember', 'none'] as const, 'ripples'),
 })
 
 // Models: the same rules as ~/.claude/model-guard/mg_common.py
