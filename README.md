@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, three are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.5.0).** Covered by tests and checked with real agents:
+> **Status: early release (0.5.1).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -20,6 +20,8 @@ work is landing, and which one needs you — and know which model is actually an
 - **Agent sheet.** Click an agent to see its task, its latest steps, what it is
   thinking, the files it changed, its model and effort, and its last words. Agents that
   started before REDhelm are filled in from Claude Code's record of their conversation.
+  In the sidebar the sheet takes the panel's place, with **← Back** to your agents; from
+  the bar above the prompt it opens on its own and closes with Esc.
 - **Message and Stop.** Message fills your prompt with `→ name: `; type and press Enter
   to send it to that agent instead of Claude (you can also type `→ name: message`
   yourself). What you were typing to Claude is kept and comes back after. Changed your

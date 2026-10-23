@@ -392,10 +392,22 @@ function Field({ els, name, stacked, children }: { els: Els; name: string; stack
   )
 }
 
-export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Actions; columns: number }) {
+/**
+ * One agent in full. `back`: drawn inside REDhelm's panel, with Back to the list; without it the sheet
+ * is its own pane, closed with Esc.
+ */
+export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: Actions; columns: number; back?: () => void }) {
   const { Box, Text, Button } = els
   const a = v.agents.find(x => x.id === v.inspecting)
-  if (!a) return <Text color="subtle">This agent is no longer listed.</Text>
+  const backButton = back && <Button key="back" plain label="← Back" hover={{ bold: true, scope: 'back' }} onPress={back} />
+  if (!a) {
+    return (
+      <Box flexDirection="column" gap={1} width={columns}>
+        {backButton}
+        <Text color="subtle">This agent is no longer listed.</Text>
+      </Box>
+    )
+  }
   const s = rack(v).find(x => x.agent.id === a.id)!
   const ask = s.messages.at(-1)
   const live = LIVE.has(a.status)
@@ -404,11 +416,12 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
   const long = !!brief && brief.length > 280
   return (
     <Box flexDirection="column" gap={1} width={columns}>
-      <Box justifyContent="space-between" gap={2}>
-        <Box gap={1} flexShrink={0}>
-          <Avatar els={els} a={a} v={v} />
-          <Text bold>{label(a, v.lanes)}</Text>
-          {ask && <Badge els={els} text="Asks you" color="warning" />}
+      {backButton}
+      <Box justifyContent="space-between" columnGap={2} flexWrap="wrap">
+        <Box columnGap={1} flexShrink={1} flexWrap="wrap">
+          <Box flexShrink={0}><Avatar els={els} a={a} v={v} /></Box>
+          <Box flexShrink={1} minWidth={8}><Text bold>{label(a, v.lanes)}</Text></Box>
+          {ask && <Box flexShrink={0}><Badge els={els} text="Asks you" color="warning" /></Box>}
         </Box>
         <Text color="subtle" wrap="truncate-end">{doing(a, v.now)} · {minutes((a.endedAt ?? v.now) - a.startedAt)}</Text>
       </Box>
@@ -416,7 +429,7 @@ export function Sheet({ els, v, act, columns }: { els: Els; v: View; act: Action
       {/* What you can do comes first, so a long sheet never pushes it out of sight. */}
       <Box justifyContent="space-between" gap={2}>
         {live || ask ? <AgentButtons els={els} s={s} v={v} act={act} primary={ask ? 'Reply' : 'Message'} /> : <Text color="subtle">This agent has finished.</Text>}
-        <Text color="subtle">Esc to close</Text>
+        {!back && <Box flexShrink={0}><Text color="subtle">Esc to close</Text></Box>}
       </Box>
 
       {ask && (

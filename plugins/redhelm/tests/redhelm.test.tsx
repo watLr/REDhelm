@@ -141,10 +141,17 @@ const SHEET = {
   props: { title: 'Agent', isFocused: true, bodyColumns: 70, placement: 'inline' },
 } as const
 
-/** Click an agent's name on the panel, then look at the sheet it opens. */
-const openSheet = async ($: any, ui: any, id: string, surface = 'terminal') => {
+/** Click an agent's name on the panel: its sheet is drawn in the panel itself, and "closing" it is Back. */
+const openSheet = async (_$: any, ui: any, id: string, _surface = 'terminal') => {
   await ui.press({ key: `sel-${id}` })
-  return $.ui.mount({ ...SHEET, surface } as any)
+  await new Promise<void>(r => setTimeout(() => r(), 40))
+  return {
+    find: (q: any) => ui.find(q),
+    findAll: (q: any) => ui.findAll(q),
+    press: (t: any) => ui.press(t),
+    // Back, unless the sheet already went back on its own (Message returns to the panel).
+    unmount: async () => { if (await ui.find({ key: 'back' })) await ui.press({ key: 'back' }); await new Promise<void>(r => setTimeout(() => r(), 40)) },
+  }
 }
 
 /** Beneath REDhelm: the engine's session, spawn and tools answer without running anything. */
@@ -798,6 +805,54 @@ describe('a reply abandoned by hand', () => {
     expect(box).toBe('my draft')
     expect(await ui.find({ type: 'Text', text: /Writing to/ })).toBeUndefined()
     await ui.unmount()
+  })
+})
+
+describe('the agent sheet', () => {
+  test('opens inside the panel, not as a tab beside it, and Back returns to your agents', async ($: any, on: any) => {
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+    expect(await ui.find({ type: 'Text', text: /1 working/ })).toBeDefined()
+    await ui.press({ key: 'sel-a1' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(await ui.find({ type: 'Text', text: /Asked to/ })).toBeDefined()
+    expect(await ui.find({ key: 'back' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /1 working/ })).toBeUndefined() // the sheet, in place of the list and its counts
+    await ui.press({ key: 'back' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(await ui.find({ type: 'Text', text: /1 working/ })).toBeDefined()
+    expect(await ui.find({ key: 'back' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('Message from the sheet goes back to the panel, where "Writing to" shows', async ($: any, on: any) => {
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+    on('prompt.fill', () => ({ isFilled: true }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+    const sheet = await openSheet($, ui, 'a1')
+    await sheet.press({ key: 'compose-a1' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(await ui.find({ type: 'Text', text: /Writing to Docs/ })).toBeDefined()
+    expect(await ui.find({ key: 'back' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('from the bar above the prompt, where there is no panel to draw in, it opens as its own pane', async ($: any, on: any) => {
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
+    await $.command.run({ command: 'redhelm', args: 'bottom', origin: { kind: 'person' }, presentation: {} } as any)
+    const band = await $.ui.mount({ plugin: 'redhelm', component: 'AbovePrompt', surface: 'terminal',
+      props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 120 } } as any)
+    await band.press({ key: 'sel-a1' })
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    const sheet = await $.ui.mount({ ...SHEET, surface: 'terminal' } as any)
+    expect(await sheet.find({ type: 'Text', text: /Asked to/ })).toBeDefined()
+    expect(await sheet.find({ type: 'Text', text: /Esc to close/ })).toBeDefined()
+    await sheet.unmount()
+    await band.unmount()
   })
 })
 

@@ -480,7 +480,11 @@ async function takeDraft($: $) {
 
 // Drawing
 
-function actions($: $): Actions {
+/**
+ * `inPane`: pressed in REDhelm's own panel, where an agent's sheet is drawn in place with Back.
+ * Elsewhere (the bar above the prompt) there is no panel to draw in, so the sheet opens as its own pane.
+ */
+function actions($: $, inPane = false): Actions {
   const open = () => void $.ui.open({ id: PANE, title: TITLE, focus: true }).catch(() => {})
   return {
     open,
@@ -488,7 +492,13 @@ function actions($: $): Actions {
       void (async () => {
         if (!id) {
           await update($, inspecting, () => null)
-          return $.ui.close({ id: SHEET })
+          return inPane ? undefined : $.ui.close({ id: SHEET })
+        }
+        if (inPane) {
+          // In place: a second pane would only be a tab behind this one, which Claude Code will not bring forward.
+          await update($, briefOpen, () => false)
+          await update($, inspecting, () => id)
+          return quietly(() => backfill($, id))
         }
         // Opened first, inside the press: Claude Code places a pane the person asked for at any width,
         // while one a plugin opens on its own waits for a wide terminal.
@@ -503,7 +513,11 @@ function actions($: $): Actions {
     compose: id =>
       void (async () => {
         if (!id) return update($, composing, () => null)
-        if ((await $.state.get(INSPECTING)).value === id) await $.ui.close({ id: SHEET }).catch(() => {})
+        // From the sheet, back to the panel, where "Writing to" shows the way back.
+        if ((await $.state.get(INSPECTING)).value === id) {
+          await update($, inspecting, () => null)
+          if (!inPane) await $.ui.close({ id: SHEET }).catch(() => {})
+        }
         // What you were typing to Claude is set aside, never sent to the agent; it comes back after.
         const text = (await $.prompt.read()).text
         const already = text.match(ADDRESS)
@@ -832,10 +846,15 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e)) // fail open: an error in REDhelm never holds your work)
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const els = elements($.ui.resolve(e), e.surface)
+    const v = await view($)
+    const act = actions($, true)
+    // An agent's sheet takes the panel's place until Back.
+    if (v.inspecting) return <Sheet els={els} v={v} act={act} columns={e.props.bodyColumns} back={() => act.inspect(null)} />
     return <Panel
-      els={elements($.ui.resolve(e), e.surface)}
-      v={await view($)}
-      act={actions($)}
+      els={els}
+      v={v}
+      act={act}
       shape={{ kind: e.props.placement === 'dock' ? 'tall' : 'wide', columns: e.props.bodyColumns, rows: e.viewport?.rows ?? 12, classic: e.surface === 'terminal' && e.viewport?.isFullscreen === false }}
     />
   })
@@ -843,7 +862,8 @@ export const register: Register = (on, options) => {
   /** The sheet closed by the person (Esc, its ✕) or by REDhelm: no agent is open any more, so its Details comes back. */
   on('ui.close', async ($, e, next) => {
     const r = await next(e)
-    if (e.id === SHEET) await quietly(() => update($, inspecting, () => null))
+    // The panel closing takes its sheet with it; reopened, it shows your agents.
+    if (e.id === SHEET || e.id === PANE) await quietly(() => update($, inspecting, () => null))
     return r
   })
 
