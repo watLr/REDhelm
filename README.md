@@ -3,33 +3,43 @@
 A live sidebar for your Claude Code agents. See what every agent is doing, where its
 work is landing, and which one needs you — and know which model is actually answering.
 
-![REDhelm docked beside the conversation: one agent asks a question, three are working](docs/images/redhelm-right.png)
+![REDhelm docked beside the conversation: one agent asks a question, two are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.5.1).** Covered by tests and checked with real agents:
+> **Status: early release (0.6.0).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
 ## What it does
 
-![A question from an agent, and an agent's sheet](docs/images/redhelm-sheet.png)
+<img src="docs/images/redhelm-sheet.png" alt="An agent's sheet: its live trace, task, steps, files, model and last words" width="300" align="right">
 
-- **Your agents, in plain words.** One row per agent: what it is doing right now
-  (reading the code, writing code, running checks), and for how long. An agent waiting
-  on another agent or on work it started says so; only a real question for you is
-  marked as needing you.
-- **Agent sheet.** Click an agent to see its task, its latest steps, what it is
-  thinking, the files it changed, its model and effort, and its last words. Agents that
+- **Every agent is a live signal.** One row per agent, on one aligned grid: a state
+  glyph, its name, a trace of its tool calls over the last half minute, and how long it
+  has run. The trace moves while the agent works and flattens when it goes quiet. Under
+  the name, a few words on what it is doing.
+- **States at a glance.** `▶` working · `▷` quiet (no action for 15 minutes) · `◆`
+  waiting on another agent or on work it started · `⚑` asks you · `✓` finished · `✕`
+  failed or stopped. The header counts them: `⚑ 1  ▶ 2  ✓ 1`.
+- **Words written for you.** Claude Code's small model (Haiku, low effort) writes each
+  working agent's headline ("Editing setup.md troubleshooting") and each question's
+  short title, the way `/btw` answers a side question. REDhelm's own plain words show
+  until a label arrives, and whenever the model is slow or switched off.
+- **Agent sheet.** Click an agent for its trace over the last minute, its task, latest
+  steps, the files it changed, its model and effort, and its last words. Agents that
   started before REDhelm are filled in from Claude Code's record of their conversation.
   In the sidebar the sheet takes the panel's place, with **← Back** to your agents; from
   the bar above the prompt it opens on its own and closes with Esc.
-- **Message and Stop.** Message fills your prompt with `→ name: `; type and press Enter
+- **Message and Stop** appear when you point at a working agent, and sit at the top of
+  its sheet.
+- **Messaging an agent.** Message fills your prompt with `→ name: `; type and press Enter
   to send it to that agent instead of Claude (you can also type `→ name: message`
   yourself). What you were typing to Claude is kept and comes back after. Changed your
   mind? **Cancel** on the "Writing to …" line puts your draft back.
-- **Needs you.** An agent that asks you something gets a card with its question and a
-  **Reply** button. Claude Code's small, fast model tells a question from a report (with a
-  plain check of the wording if the model can't be reached); a report is not a question,
-  so it pops up briefly and becomes the agent's last words in its sheet instead. A
+- **Needs you.** An agent that asks you something gets a card with an amber edge, its
+  question in a line and a **Reply** button; the whole question is in its sheet. Claude
+  Code's small, fast model tells a question from a report (with a plain check of the
+  wording if the model can't be reached); a report is not a question, so it pops up
+  briefly and becomes the agent's last words in its sheet instead. A
   question clears once you or Claude answer it. From an agent that has ended, it stays
   30 minutes (a reply still resumes that agent), with **Dismiss** to put it away sooner.
 - **Updates.** When a newer REDhelm is published, a quiet line at the bottom of the
@@ -102,13 +112,25 @@ Every option is a row in `/config`, per user:
 | Desktop notification after (seconds) | number, 0 = off | 120 |
 | Open REDhelm by itself | on · off | on |
 | Pop-ups when agents finish or message you | on · off | on |
+| Motion: traces move, a new question's edge flashes | on · off | on |
+| Labels: headlines and question titles | haiku · plain | haiku |
 
 ## Privacy
 
 REDhelm reads your project folder and Claude Code's own session data on your machine.
-It makes no network requests. What it remembers (model switches, the newest model
-versions seen, which setup items you handled) stays in Claude Code's plugin storage on
-your machine.
+What it remembers (model switches, the newest model versions seen, which setup items you
+handled) stays in Claude Code's plugin storage on your machine.
+
+It reaches out in two ways:
+
+- **Update check.** A few times a day it reads REDhelm's published version number from
+  GitHub. It sends nothing about you or your work.
+- **Labels.** While REDhelm is on screen, it asks Claude Code's small model for short
+  headlines and question titles. Each request carries an agent's task (first 300
+  characters), its latest steps and words, or a question an agent asked; it goes through
+  Claude Code, to the same provider as the rest of your session, and counts toward your
+  usage. At most one request runs at a time, each agent is labelled at most every
+  20 seconds, and answers are reused. Set Labels to `plain` to turn it off.
 
 ## Behaviour notes
 

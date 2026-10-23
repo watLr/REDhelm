@@ -1,11 +1,11 @@
 /**
- * An agent's activity trace: when its tool calls happened, drawn as braille bars on a flat
- * baseline. The bars rise while it works and flatten when it goes quiet. Pure: times in, text out.
+ * An agent's activity trace: when its tool calls happened, drawn as bars on a flat baseline. The
+ * bars rise while it works and flatten when it goes quiet. Pure: times in, text out.
  */
 
-export const BUCKET_MS = 2000
-/** 64 seconds: the sheet's 16 cells. A row shows the newest 16 buckets as 8 cells. */
-export const BUCKETS = 32
+export const BUCKET_MS = 4000
+/** A minute: the sheet's 16 cells, one bucket each. A row shows the newest 8, half a minute. */
+export const BUCKETS = 16
 const KEEP_MS = BUCKET_MS * BUCKETS
 /** The terminal's own colour, in a Raster cell. */
 export const DEFAULT_COLOR = 0x01000000
@@ -29,32 +29,30 @@ export function buckets(times: readonly number[], now: number, n = BUCKETS): num
   return out
 }
 
-/** Whether an agent called a tool in the last 32 seconds: what a row's trace shows moving. */
+/** Whether an agent called a tool in the last half minute: what a row's trace shows moving. */
 export const isMoving = (times: readonly number[], now: number) =>
-  times.some(t => t <= now && now - t < BUCKET_MS * 16)
+  times.some(t => t <= now && now - t < BUCKET_MS * 8)
 
-/** Bar heights in dots: 1 is the flat baseline, 4 × rows the top. Four calls fill a row; a busier window scales down. */
+/** Eighths of a cell, bottom up: one bar level each. */
+const LEVELS = '▁▂▃▄▅▆▇█'
+
+/** Bar heights in eighths: 1 is the flat baseline, 8 × rows the top. Four calls fill a row; a busier window scales down. */
 export function heights(counts: readonly number[], rows: number) {
-  const top = rows * 4
+  const top = rows * 8
   const scale = Math.max(4, ...counts)
   return counts.map(c => (c <= 0 ? 1 : Math.min(top, 1 + Math.max(1, Math.round((c / scale) * (top - 1))))))
 }
 
-/** Braille dots, bottom to top: the left column (1 2 3 7) and the right (4 5 6 8). */
-const LEFT = [0x40, 0x04, 0x02, 0x01]
-const RIGHT = [0x80, 0x20, 0x10, 0x08]
-
-/** The trace as lines of braille, top first; each cell draws two buckets, left then right. */
-export function braille(counts: readonly number[], rows = 1): string[] {
+/** The trace as lines of bars, top first, one bucket a cell. */
+export function bars(counts: readonly number[], rows = 1): string[] {
   const h = heights(counts, rows)
-  const fill = (height: number | undefined, dots: number[], below: number) =>
-    dots.slice(0, Math.max(0, Math.min(4, (height ?? 0) - below))).reduce((m, d) => m | d, 0)
   const lines: string[] = []
   for (let r = 0; r < rows; r++) {
-    const below = (rows - 1 - r) * 4
-    let line = ''
-    for (let i = 0; i < h.length; i += 2) line += String.fromCharCode(0x2800 | fill(h[i], LEFT, below) | fill(h[i + 1], RIGHT, below))
-    lines.push(line)
+    const below = (rows - 1 - r) * 8
+    lines.push(h.map(x => {
+      const n = Math.max(0, Math.min(8, x - below))
+      return n ? LEVELS[n - 1]! : ' '
+    }).join(''))
   }
   return lines
 }
@@ -86,12 +84,12 @@ export function rasterCells(lines: readonly string[], fg = DEFAULT_COLOR): strin
 
 /** One agent's trace, `cells` wide and `rows` tall, as Raster cells at `now`. */
 export const traceRaster = (times: readonly number[], now: number, cells: number, rows: number, fg: number) =>
-  rasterCells(braille(buckets(times, now, cells * 2), rows), fg)
+  rasterCells(bars(buckets(times, now, cells), rows), fg)
 
 /** The same trace for surfaces that draw SVG: a step line over the baseline. */
 export function svgTrace(counts: readonly number[], width: number, height: number, rows: number, color: string) {
   const h = heights(counts, rows)
-  const top = rows * 4
+  const top = rows * 8
   const step = width / Math.max(1, counts.length)
   const y = (v: number) => (height - 1.5 - ((v - 1) / Math.max(1, top - 1)) * (height - 3)).toFixed(1)
   const points = h.map((v, i) => `${(i * step).toFixed(1)},${y(v)} ${((i + 1) * step).toFixed(1)},${y(v)}`).join(' ')

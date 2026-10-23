@@ -9,7 +9,7 @@ import { grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstAsk, plainHea
 } from '../hooks/model'
 import { workspaces, type Io } from '../hooks/sources'
 import { label, rack, relevant, shortName, summary, type View } from '../hooks/view'
-import { braille, buckets, rasterCells, record } from '../hooks/trace'
+import { bars, buckets, rasterCells, record } from '../hooks/trace'
 import { clean, labeler, type Complete } from '../hooks/labels'
 
 const agent = (over: Partial<Agent>): Agent => ({
@@ -986,25 +986,22 @@ describe('a newer REDhelm', () => {
 
 
 describe('traces', () => {
-  test('calls fall into fixed two-second buckets, newest last, and age out after a minute', () => {
-    expect(buckets([0, 100, 2500, 9000], 9999, 5)).toEqual([2, 1, 0, 0, 1])
+  test('calls fall into fixed four-second buckets, newest last, and age out after a minute', () => {
+    expect(buckets([0, 100, 4500, 19_000], 19_999, 5)).toEqual([2, 1, 0, 0, 1])
     expect(buckets([], 0, 3)).toEqual([0, 0, 0])
     expect(buckets([5000], 4000, 3)).toEqual([0, 0, 0]) // not yet
     expect(record([0, 70_000], 70_500)).toEqual([70_000, 70_500])
   })
 
-  test('braille draws bars on a flat baseline, two buckets a cell', () => {
-    expect(braille([0, 0])).toEqual(['⣀'])
-    expect(braille([4, 4])).toEqual(['⣿'])
-    expect(braille([1, 0])[0]!.codePointAt(0)).toBe(0x2800 | 0x40 | 0x04 | 0x80)
-    expect(braille([0, 0], 2)).toEqual(['⠀', '⣀'])
-    expect(braille([8, 8], 2)).toEqual(['⣿', '⣿'])
+  test('bars rise from a flat baseline, one bucket a cell', () => {
+    expect(bars([0, 0, 1, 4])).toEqual(['▁▁▃█'])
+    expect(bars([0, 8], 2)).toEqual([' █', '▁█'])
   })
 
   test('raster cells are base64 of the code point, colour and background of each cell', () => {
-    const b = atob(rasterCells(['⣀'], 0x123456))
+    const b = atob(rasterCells(['▁'], 0x123456))
     const u32 = (i: number) => (b.charCodeAt(i) | (b.charCodeAt(i + 1) << 8) | (b.charCodeAt(i + 2) << 16) | (b.charCodeAt(i + 3) << 24)) >>> 0
-    expect([b.length, u32(0), u32(4), u32(8)]).toEqual([12, 0x28c0, 0x123456, 0x01000000])
+    expect([b.length, u32(0), u32(4), u32(8)]).toEqual([12, 0x2581, 0x123456, 0x01000000])
   })
 })
 
@@ -1079,7 +1076,7 @@ describe('the live list', () => {
     await edit($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Raster' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /^[⠀-⣿]{8}$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^[▁-█]{8}$/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -1094,7 +1091,7 @@ describe('the live list', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await clock.advance(61_100) // on screen, and past its first minute: times change once a minute now
     await edit($)
-    await clock.advance(2_100) // the trace scrolls a bucket, between redraws
+    await clock.advance(4_100) // the trace scrolls a bucket, between redraws
     expect(blits).toContain('trace-a1')
     status = 'completed'
     await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', agentId: 'a1', reason: 'answer' })

@@ -5,7 +5,7 @@ import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types
 import { DEFAULTS, LINES, activity, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { headlineInput, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
-import { BUCKET_MS, BUCKETS, DEFAULT_COLOR, isMoving, record, traceRaster } from './trace'
+import { BUCKET_MS, BUCKETS, isMoving, record, traceRaster } from './trace'
 import { Alert, Panel, Sheet, clockFace, type Actions, type Els, type TraceSpec, type View } from './view'
 
 type $ = EngineInterface
@@ -564,7 +564,7 @@ async function frame($: $) {
     for (const [requestId, keys] of sites) {
       for (const [key, spec] of keys) {
         const times = traces.get(spec.agentId) ?? []
-        const cells = traceRaster(times, at, spec.cells, spec.rows, isMoving(times, at) ? DEFAULT_COLOR : spec.quiet)
+        const cells = traceRaster(times, at, spec.cells, spec.rows, isMoving(times, at) ? spec.moving : spec.quiet)
         if (cells === spec.sent) continue
         spec.sent = cells
         const r = (await $.ui.blit({ requestId, key, cells }).catch(() => ({ deny: 'failed' }))) as { deny?: string }
@@ -635,7 +635,7 @@ function actions($: $, inPane = false): Actions {
       void (async () => {
         const name = await nameOf($, id)
         // Typed narrowly: the full tool.call union is deeper than tsc will instantiate here.
-        await ($.tool.call as (input: { tool: 'TaskStop'; task_id: string }) => Promise<unknown>)({ tool: 'TaskStop', task_id: id })
+        await ($.tool.call as unknown as (input: { tool: 'TaskStop'; task_id: string }) => Promise<unknown>)({ tool: 'TaskStop', task_id: id })
         await note($, { kind: 'fail', text: `${name} stopped by you`, agentId: id })
       })(),
     toggleDone: () => void update($, showDone, x => !x),

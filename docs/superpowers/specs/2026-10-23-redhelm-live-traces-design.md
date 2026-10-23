@@ -187,3 +187,20 @@ default `haiku`). Both documented in the README.
 
 - An "ask REDhelm a question" box (a `/btw` for agents). Possible later.
 - Changes to the model guard, setup card, workflows or update line beyond restyling.
+
+## Changes made while building (0.6.0)
+
+Found on the live render and kept:
+
+- **Bars, not braille.** Braille dots rendered as faint specks in a terminal sidebar. The
+  trace uses block bars (`▁▂▃▄▅▆▇█`), one 4-second bucket per cell: a row shows 8 cells
+  (32 s), the sheet 16 (64 s). Moving bars use a mid-grey, so the name stays the first read.
+- **One-row sheet trace.** Stacked rows of bars break apart at terminal line spacing.
+- **Redraw only when a shown time changes.** The ticker compares every shown time
+  (`clockFace`) and redraws only on a change, so an agent past its first minute redraws
+  once a minute and its trace moves by Raster repaints alone. The 125 ms frame loop runs
+  only while REDhelm is on screen and a trace still moves.
+- **Narrow question card.** Below 34 columns the card shows the age without `asks ·`;
+  below 30, chips use one column of padding.
+- **Surface choice.** Element tables name every element on every surface (a missing one
+  draws nothing), so Raster vs Svg is chosen by `e.surface`.

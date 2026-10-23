@@ -2,7 +2,7 @@ import type { Elements } from 'claude-code'
 
 import type { Agent, Guard, Message, Note, Release, SetupItem, Workspace } from '../types'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
-import { DEFAULT_COLOR, braille, buckets, isMoving, rasterCells, svgTrace } from './trace'
+import { bars, buckets, isMoving, rasterCells, svgTrace } from './trace'
 
 /**
  * Every agent is a live signal. Each row carries a trace of its tool calls: the trace moves while
@@ -37,8 +37,8 @@ export type Actions = {
   update: () => void
 }
 
-/** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colour once flat, the cells it holds. */
-export type TraceSpec = { agentId: string; cells: number; rows: number; quiet: number; sent?: string }
+/** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colours moving and flat, the cells it holds. */
+export type TraceSpec = { agentId: string; cells: number; rows: number; moving: number; quiet: number; sent?: string }
 
 export type View = {
   now: number
@@ -73,8 +73,8 @@ export type View = {
 // Tokens: surfaces follow the theme; meaning colours are the theme's own keys
 
 const PALETTE = {
-  dark: { card: '#1c1c21', chip: '#2c2c33', chipHover: '#3a3a42', primary: '#d6363c', primaryHover: '#e5484d', rule: '#2c2c33', hover: '#232329', quiet: 0x5a5a64, svg: '#b4b4be', svgQuiet: '#55555e' },
-  light: { card: '#f2f2f5', chip: '#e2e2e7', chipHover: '#d4d4db', primary: '#fbd5d6', primaryHover: '#f8c1c3', rule: '#e2e2e7', hover: '#ececf0', quiet: 0xa8a8b2, svg: '#55555e', svgQuiet: '#b8b8c0' },
+  dark: { card: '#1c1c21', chip: '#2c2c33', chipHover: '#3a3a42', primary: '#d6363c', primaryHover: '#e5484d', rule: '#2c2c33', hover: '#232329', trace: 0x9a9aa6, quiet: 0x4c4c55, svg: '#9a9aa6', svgQuiet: '#4c4c55' },
+  light: { card: '#f2f2f5', chip: '#e2e2e7', chipHover: '#d4d4db', primary: '#fbd5d6', primaryHover: '#f8c1c3', rule: '#e2e2e7', hover: '#ececf0', trace: 0x6e6e7a, quiet: 0xbdbdc6, svg: '#6e6e7a', svgQuiet: '#bdbdc6' },
 } as const
 
 const tone = (v: View) => PALETTE[v.theme] ?? PALETTE.dark
@@ -114,7 +114,7 @@ export function rack(v: View): Strip[] {
 export const shortName = (name: string) => name.split(/\s[(—–-]\s?/)[0]!.trim() || name
 
 /** A name cut to the columns the grid leaves it. */
-const fit = (text: string, room: number) => (text.length <= room ? text : `${text.slice(0, Math.max(1, room - 1))}…`)
+const fit = (text: string, room: number) => (text.length <= room ? text : `${text.slice(0, Math.max(1, room - 1)).trimEnd()}…`)
 
 /** The time column: how long it has run, how long ago it ended, or the state that matters more. */
 function when(a: Agent, v: View) {
@@ -146,11 +146,11 @@ function Glyph({ els, state }: { els: Els; state: State }) {
 }
 
 /** A filled button: the primary one in REDhelm red, the rest quiet. */
-function Chip({ els, v, k, text, primary, onPress }: { els: Els; v: View; k: string; text: string; primary?: boolean; onPress: () => void }) {
+function Chip({ els, v, k, text, primary, compact, onPress }: { els: Els; v: View; k: string; text: string; primary?: boolean; compact?: boolean; onPress: () => void }) {
   const { Box, Button } = els
   const t = tone(v)
   return (
-    <Box backgroundColor={primary ? t.primary : t.chip} paddingX={2} flexShrink={0}>
+    <Box backgroundColor={primary ? t.primary : t.chip} paddingX={compact ? 1 : 2} flexShrink={0}>
       <Button key={k} plain label={text} hover={{ bold: true, backgroundColor: primary ? t.primaryHover : t.chipHover, scope: k }} onPress={onPress} />
     </Box>
   )
@@ -174,18 +174,18 @@ function Card({ els, v, children }: { els: Els; v: View; children: any }) {
 }
 
 /**
- * An agent's tool calls over the last half minute (a row) or minute (the sheet), as braille bars.
+ * An agent's tool calls over the last half minute (a row) or minute (the sheet), as bars.
  * Terminal: a Raster the frame loop repaints in place while it moves. Elsewhere, a drawing.
  */
 function Trace({ els, v, a, k, cells, rows = 1 }: { els: Els; v: View; a: Agent; k: string; cells: number; rows?: number }) {
   const { Box, Text, Raster, Svg } = els
   const t = tone(v)
   const times = v.traces[a.id] ?? []
-  const counts = buckets(times, v.at, cells * 2)
+  const counts = buckets(times, v.at, cells)
   const moving = isMoving(times, v.at)
   if (Raster && v.motion) {
-    const drawn = rasterCells(braille(counts, rows), moving ? DEFAULT_COLOR : t.quiet)
-    v.mount?.(k, { agentId: a.id, cells, rows, quiet: t.quiet, sent: drawn })
+    const drawn = rasterCells(bars(counts, rows), moving ? t.trace : t.quiet)
+    v.mount?.(k, { agentId: a.id, cells, rows, moving: t.trace, quiet: t.quiet, sent: drawn })
     return <Box width={cells} flexShrink={0}><Raster key={k} columns={cells} rows={rows} cells={drawn} /></Box>
   }
   if (Svg) {
@@ -193,7 +193,7 @@ function Trace({ els, v, a, k, cells, rows = 1 }: { els: Els; v: View; a: Agent;
   }
   return (
     <Box width={cells} flexShrink={0} flexDirection="column">
-      {braille(counts, rows).map((line, i) => <Text key={`${k}-${i}`} color={moving ? undefined : 'subtle'}>{line}</Text>)}
+      {bars(counts, rows).map((line, i) => <Text key={`${k}-${i}`} color={moving ? undefined : 'subtle'}>{line}</Text>)}
     </Box>
   )
 }
@@ -278,20 +278,24 @@ function Row({ els, s, v, act, columns, cells }: { els: Els; s: Strip; v: View; 
  * An agent that asked you something: the amber edge, who, how long ago, the question in a line,
  * and Reply. The edge flashes a few times when the question arrives, then holds.
  */
-function QuestionCard({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Actions }) {
+function QuestionCard({ els, s, v, act, columns }: { els: Els; s: Strip; v: View; act: Actions; columns: number }) {
   const { Box, Text, Button } = els
   const a = s.agent
   const ask = s.messages.at(-1)!
   const since = v.now - ask.at
+  // Narrow: the flag already says it asks; the time alone keeps the name its room.
+  const roomy = columns >= 34
+  const compact = columns < 30
+  const time = roomy ? `asks · ${age(since)}` : age(since)
   const flash = v.motion && since >= 0 && since < 1500 && Math.floor(since / 250) % 2 === 1
   return (
     <EdgeCard els={els} v={v} k={`ask-${a.id}`} edge={flash ? tone(v).chip : 'warning'}>
       <Box justifyContent="space-between" columnGap={1}>
         <Box flexShrink={1} minWidth={6}>
           <Glyph els={els} state="asks" />
-          <Button key={`sel-${a.id}`} plain label={label(a, v.lanes)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
+          <Button key={`sel-${a.id}`} plain label={fit(label(a, v.lanes), columns - 1 - 2 - 2 - time.length - 1)} hover={{ underline: true, scope: `sel-${a.id}` }} onPress={() => act.inspect(a.id)} />
         </Box>
-        <Box flexShrink={0}><Text color="subtle">{`asks · ${age(since)}`}</Text></Box>
+        <Box flexShrink={0}><Text color="subtle">{time}</Text></Box>
       </Box>
       <Box paddingLeft={2}>
         <Text bold wrap="wrap">{ask.title ?? firstAsk(ask.text)}</Text>
@@ -300,8 +304,8 @@ function QuestionCard({ els, s, v, act }: { els: Els; s: Strip; v: View; act: Ac
         <Box columnGap={1} flexWrap="wrap">
           {v.composing === a.id
             ? <Text color="warning">↓ type below</Text>
-            : <Chip els={els} v={v} k={`compose-${a.id}`} text="Reply" primary onPress={() => act.compose(a.id)} />}
-          {!LIVE.has(a.status) && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" onPress={() => act.dismiss(a.id)} />}
+            : <Chip els={els} v={v} k={`compose-${a.id}`} text="Reply" primary compact={compact} onPress={() => act.compose(a.id)} />}
+          {!LIVE.has(a.status) && <Chip els={els} v={v} k={`dismiss-${a.id}`} text="Dismiss" compact={compact} onPress={() => act.dismiss(a.id)} />}
         </Box>
         <Box flexShrink={0}>
           <Button key={`more-${a.id}`} plain dimColor label="Details ›" hover={{ bold: true, scope: `more-${a.id}` }} onPress={() => act.inspect(a.id)} />
@@ -506,8 +510,9 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
   const room = Math.max(60, (columns - (stacked ? 0 : 11)) * 2 - 4)
   const long = brief.length > room
   const said = a.answer || a.thinking
+  // A sheet longer than the pane scrolls, and its scrollbar takes the last column.
   return (
-    <Box flexDirection="column" gap={1} width={columns}>
+    <Box flexDirection="column" gap={1} width={columns} paddingRight={1}>
       {backButton}
       <Box flexDirection="column">
         <Box justifyContent="space-between" columnGap={2}>
@@ -541,7 +546,8 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
         </EdgeCard>
       )}
 
-      {live && <Trace els={els} v={v} a={a} k={`trace-big-${a.id}`} cells={16} rows={columns >= 40 ? 4 : 2} />}
+      {/* One row: stacked rows of bars break apart at the terminal's line spacing. */}
+      {live && <Trace els={els} v={v} a={a} k={`trace-big-${a.id}`} cells={16} />}
 
       <Box flexDirection="column" gap={1}>
         {brief && (
@@ -618,7 +624,7 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       <Composer els={els} v={v} act={act} />
       <ModelNotice els={els} v={v} />
       <SetupCard els={els} v={v} act={act} />
-      {needs.map(s => <QuestionCard key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} />)}
+      {needs.map(s => <QuestionCard key={`n-${s.agent.id}`} els={els} s={s} v={v} act={act} columns={columns} />)}
       {working.length > 0 && (
         <Box flexDirection="column" rowGap={1}>
           {working.map(s => <Row key={s.agent.id} els={els} s={s} v={v} act={act} columns={columns} cells={cells} />)}
