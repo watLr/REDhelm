@@ -5,7 +5,7 @@ work is landing, and which one needs you — and know which model is actually an
 
 ![REDhelm docked beside the conversation: one agent asks a question, two are working](docs/images/redhelm-right.png)
 
-> **Status: early release (0.6.0).** Covered by tests and checked with real agents:
+> **Status: early release (0.6.1).** Covered by tests and checked with real agents:
 > the agent list and sheet, **Message** and **Stop**, the model guard, settings and
 > workflows. Issues welcome.
 
@@ -73,7 +73,7 @@ Restart running sessions (`/restart`) to load it.
 | `/redhelm` | Open or close the panel |
 | `/redhelm right` · `/redhelm bottom` | Sidebar beside the conversation, or a bar above the prompt |
 | `/redhelm setup` | Review the Claude Code settings REDhelm recommends |
-| `/redhelm models` | Which models actually answered this session, and recent switches |
+| `/redhelm models` | Which models actually answered this session, recent switches, and what REDhelm's labels used |
 | `/redhelm update` | Install the newer REDhelm, if there is one (then `/reload-plugins`) |
 
 ![REDhelm above the prompt](docs/images/redhelm-bottom.png)
@@ -129,8 +129,10 @@ It reaches out in two ways:
   headlines and question titles. Each request carries an agent's task (first 300
   characters), its latest steps and words, or a question an agent asked; it goes through
   Claude Code, to the same provider as the rest of your session, and counts toward your
-  usage. At most one request runs at a time, each agent is labelled at most every
-  20 seconds, and answers are reused. Set Labels to `plain` to turn it off.
+  usage: a few hundred tokens each. At most one request runs at a time; an agent's
+  headline is asked for again only when its steps change, at most every 45 seconds; no
+  more than 30 requests go out in an hour; answers are reused. `/redhelm models` shows
+  what labels have used this session. Set Labels to `plain` to turn them off.
 
 ## Behaviour notes
 

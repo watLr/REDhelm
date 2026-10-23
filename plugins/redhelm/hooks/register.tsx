@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types'
 import { DEFAULTS, LINES, activity, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
-import { headlineInput, labeler, titleInput, type Complete } from './labels'
+import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
 import { BUCKET_MS, BUCKETS, isMoving, record, traceRaster } from './trace'
 import { Alert, Panel, Sheet, clockFace, type Actions, type Els, type TraceSpec, type View } from './view'
@@ -467,6 +467,8 @@ async function modelsReport($: $) {
     ...(switches.length
       ? switches.slice(-5).reverse().map(s => `  ${span(at - s.at).padStart(4)} ago  ${short(s.from)} → ${short(s.to)}  (${s.source === 'auto' ? 'on its own' : s.source})`)
       : ['  none']),
+    '',
+    `REDhelm labels (${cfg.labels === 'haiku' ? 'Haiku, low effort' : 'off'}): ${spent.calls} ${spent.calls === 1 ? 'request' : 'requests'}, ${kilo(spent.input)} in, ${kilo(spent.output)} out`,
   ]
   return lines.join('\n')
 }
@@ -507,8 +509,14 @@ async function onScreen($: $) {
 /** One label from the small model, the way /btw asks a side question: low effort, a few words, six seconds at most. */
 const askHaiku = ($: $): Complete => async ({ system, prompt }) => {
   const r = await $.model.complete({ model: 'haiku', effort: 'low', maxTokens: 30, timeoutMs: 6000, system, prompt }, { signal: stopLabels.signal })
+  spent.calls++
+  spent.input += r.usage?.input_tokens ?? 0
+  spent.output += r.usage?.output_tokens ?? 0
   return r.isAnswered ? r.text : undefined
 }
+
+/** What labels have cost this session, for /redhelm models. */
+const spent = { calls: 0, input: 0, output: 0 }
 
 /** Titles for questions first (they are what you read), then headlines for agents at work; written only when they change. */
 async function labelAll($: $) {
@@ -520,8 +528,13 @@ async function labelAll($: $) {
   }
   for (const a of Object.values(await read($, agents))) {
     if (a.status !== 'running' || a.waitingOn || !(a.steps?.length || a.brief)) continue
-    const headline = await labels.ask(askHaiku($), 'headline', a.id, headlineInput(a), at)
-    if (headline && headline !== a.headline) await patch($, a.id, () => ({ headline }))
+    // Kept in the agent's own record, so a headline holds until its work changes, whoever wrote it.
+    const key = headlineKey(a)
+    if (a.headlineFor === key || at - (a.headlineAt ?? -Infinity) < HEADLINE_EVERY_MS) continue
+    const headline = await labels.ask(askHaiku($), 'headline', a.id, headlineInput(a), at, key)
+    if (!headline) continue
+    await patch($, a.id, cur =>
+      cur.headlineFor === key || at - (cur.headlineAt ?? -Infinity) < HEADLINE_EVERY_MS ? {} : { headline, headlineFor: key, headlineAt: at })
   }
 }
 
@@ -712,6 +725,7 @@ export const register: Register = (on, options) => {
     frames = undefined
     visible = false
     stopLabels = new AbortController()
+    Object.assign(spent, { calls: 0, input: 0, output: 0 })
     shownStatus = null
     root = await $.session.root()
     homeDir = await home($).catch(() => '')

@@ -9,8 +9,10 @@ import type { Agent } from '../types'
 /** Asks the model; resolves its reply's text, or undefined when there was none (an error, a timeout). */
 export type Complete = (ask: { system: string; prompt: string }) => Promise<string | undefined>
 
-/** A headline per agent, and a title per question, at most this often. */
-export const HEADLINE_EVERY_MS = 20_000
+/** An agent's headline changes at most this often, and only when its work did. */
+export const HEADLINE_EVERY_MS = 45_000
+/** Label calls a REDhelm makes in any hour, at most; past it, the plain words stay. */
+export const CALLS_PER_HOUR = 30
 const CACHE = 200
 
 const SYSTEM = {
@@ -31,6 +33,14 @@ export const headlineInput = (a: Agent) =>
   ].filter(Boolean).join('\n')
 
 export const titleInput = (question: string) => question.slice(0, 1200)
+
+/**
+ * What a headline is about: the task and the steps, not the agent's latest words. Those change on
+ * every model request; asking again for each would cost a call for a headline that reads the same.
+ */
+export const headlineKey = (a: Agent) =>
+  // Only what REDhelm itself recorded: the brief and the steps. The description Claude Code lists can change on its own.
+  hash(`${(a.brief ?? '').slice(0, 300)}\n${(a.steps ?? []).slice(0, 5).map(s => s.text).join('; ')}`)
 
 const REFUSAL = /^(i\s+(can['’]?t|cannot|am unable|won['’]?t)|i['’]m (sorry|unable)|sorry\b|as an ai)/i
 const WRAPPING = /^["'`*_“”‘’\s]+|["'`*_“”‘’\s]+$/g
@@ -58,13 +68,14 @@ export function hash(s: string) {
 }
 
 /**
- * One call at a time across REDhelm; the same input never costs a second call, and each agent or
- * question is asked at most every 20 seconds. A reply that cleans to nothing is remembered as
- * nothing; a call that failed is not, so it is tried again once the 20 seconds are up.
+ * One call at a time across REDhelm; the same key never costs a second call; each agent or question
+ * is asked at most every 45 seconds; and no more than 30 calls go out in any hour. A reply that
+ * cleans to nothing is remembered as nothing; a call that failed is not, so it is tried again later.
  */
 export function labeler() {
   const cache = new Map<string, string | null>()
   const asked = new Map<string, number>()
+  const sent: number[] = []
   let busy = false
   const keep = (k: string, v: string | null) => {
     cache.delete(k)
@@ -72,13 +83,16 @@ export function labeler() {
     if (cache.size > CACHE) cache.delete(cache.keys().next().value!)
   }
   return {
-    async ask(complete: Complete, kind: Kind, id: string, input: string, at: number): Promise<string | undefined> {
-      const k = `${kind}:${hash(input)}`
+    /** `key`: what the label is about (the input itself unless given); a new key is a new label. */
+    async ask(complete: Complete, kind: Kind, id: string, input: string, at: number, key = hash(input)): Promise<string | undefined> {
+      const k = `${kind}:${key}`
       if (cache.has(k)) return cache.get(k) ?? undefined
       const who = `${kind}:${id}`
-      if (busy || at - (asked.get(who) ?? -Infinity) < HEADLINE_EVERY_MS) return undefined
+      while (sent.length && at - sent[0]! >= 3_600_000) sent.shift()
+      if (busy || sent.length >= CALLS_PER_HOUR || at - (asked.get(who) ?? -Infinity) < HEADLINE_EVERY_MS) return undefined
       busy = true
       asked.set(who, at)
+      sent.push(at)
       try {
         const text = await complete({ system: SYSTEM[kind], prompt: input }).catch(() => undefined)
         if (text === undefined) return undefined

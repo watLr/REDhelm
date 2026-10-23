@@ -34,6 +34,9 @@ export type Agent = {
   answer?: string
   /** What it is doing, in six words or fewer, from the small model; the plain words show without it. */
   headline?: string
+  /** What the headline was written from (labels.headlineKey) and when: it changes only when the work did, at most every 45 seconds. */
+  headlineFor?: string
+  headlineAt?: number
 }
 
 export type Phase = 'exploring' | 'building' | 'checking' | 'delegating'

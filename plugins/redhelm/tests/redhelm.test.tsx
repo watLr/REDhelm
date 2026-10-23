@@ -180,11 +180,14 @@ const engine = (on: any, isInteractive: boolean, opts: { shown?: boolean } = {})
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive })
 }
 
+const spawn = ($: any) => $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+const edit = ($: any) => $.tool.call({ tool: 'Edit', file_path: 'src/guide/setup.md', old_string: 'a', new_string: 'b', agentId: 'a1' })
+
 describe('the pane', () => {
   test('a spawned agent shows live on every surface, with Message on each', async ($, on) => {
     await engine(on, true)($)
-    await $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' } as any)
-    await $.tool.call({ tool: 'Edit', file_path: 'src/guide/setup.md', old_string: 'a', new_string: 'b', agentId: 'a1' } as any)
+    await spawn($)
+    await edit($)
 
     for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
       const ui = await $.ui.mount({ ...PANE, surface } as any)
@@ -1014,7 +1017,7 @@ describe('labels', () => {
     expect(clean('Add a README section?\nMore text', 8, true)).toBe('Add a README section?')
   })
 
-  test('one call per input, one at a time, an agent at most every 20 seconds', async () => {
+  test('one call per input, one at a time, an agent at most every 45 seconds', async () => {
     const calls: string[] = []
     let release = () => {}
     const slow: Complete = async ask => {
@@ -1037,12 +1040,19 @@ describe('labels', () => {
     const flaky: Complete = async () => (++n === 1 ? undefined : 'Running the tests')
     const l = labeler()
     expect(await l.ask(flaky, 'headline', 'a1', 'x', 0)).toBeUndefined()
-    expect(await l.ask(flaky, 'headline', 'a1', 'x', 21_000)).toBe('Running the tests')
+    expect(await l.ask(flaky, 'headline', 'a1', 'x', 46_000)).toBe('Running the tests')
+  })
+
+  test('no more than 30 calls go out in an hour, whatever asks', async () => {
+    let calls = 0
+    const count: Complete = async () => (calls++, 'Working')
+    const l = labeler()
+    for (let i = 0; i < 40; i++) await l.ask(count, 'headline', `a${i}`, `input ${i}`, i * 1000)
+    expect(calls).toBe(30)
+    await l.ask(count, 'headline', 'late', 'later input', 3_601_000) // the first calls have aged out
+    expect(calls).toBe(31)
   })
 })
-
-const spawn = ($: any) => $.agent.spawn({ prompt: 'rewrite', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
-const edit = ($: any) => $.tool.call({ tool: 'Edit', file_path: 'src/guide/setup.md', old_string: 'a', new_string: 'b', agentId: 'a1' })
 
 describe('the live list', () => {
 
@@ -1128,6 +1138,31 @@ describe('labels from the small model', () => {
     const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await again.find({ type: 'Text', text: /^Rewriting the setup guide$/ })).toBeDefined()
     await again.unmount()
+  })
+
+  test('a headline holds while the work is the same, even if the model would word it differently each time', async ($: any, on: any) => {
+    let calls = 0
+    on('agent.list', () => ({ value: [docs] }))
+    on('model.complete', () => (calls++, answer(calls % 2 ? 'Rewriting the setup guide' : 'Updating the setup docs')))
+    await engine(on, true, { shown: true })($)
+    await spawn($)
+    await edit($)
+    await clock.advance(2_000)
+    const headline = async () => {
+      const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+      const text = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).find((t: string) => /setup (guide|docs)/.test(t))
+      await ui.unmount()
+      return text
+    }
+    expect(await headline()).toBe('Rewriting the setup guide')
+    await clock.advance(120_000) // the same steps: no new call, the same words
+    expect([calls, await headline()]).toEqual([1, 'Rewriting the setup guide'])
+    await edit($) // new work, long enough after: one new headline
+    await clock.advance(2_000)
+    expect([calls, await headline()]).toEqual([2, 'Updating the setup docs'])
+    await edit($) // new work again, too soon: it waits
+    await clock.advance(10_000)
+    expect([calls, await headline()]).toEqual([2, 'Updating the setup docs'])
   })
 
   test('labels: plain never calls the model', { options: { labels: 'plain' } } as any, async ($: any, on: any) => {
