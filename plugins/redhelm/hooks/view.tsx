@@ -2,7 +2,7 @@ import type { Elements } from 'claude-code'
 
 import type { Agent, Guard, Message, Note, Release, SetupItem, Workspace } from '../types'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
-import { bars, buckets, isMoving, rasterCells, spectrum, svgTrace, tail } from './trace'
+import { bars, buckets, isMoving, rasterCells, spectrum, speed, svgTrace, tail, type Burst } from './trace'
 
 /**
  * Every agent is a live signal. Each row carries a trace of its tool calls: the trace moves while
@@ -62,6 +62,8 @@ export type View = {
   lanes: Record<string, string>
   /** Each agent's recent tool call times, for its trace. */
   traces: Record<string, readonly number[]>
+  /** Each agent's recent responses, timed: how fast its tokens arrive. */
+  bursts?: Record<string, readonly Burst[]>
   /** The clock when this was drawn: where the traces end. */
   at: number
   /** Moving traces and the question flash; off, Rasters give way to still text. */
@@ -139,11 +141,12 @@ function when(a: Agent, v: View) {
  * Every time REDhelm shows, as one string: when it changes, a redraw is due. An agent past its first
  * minute changes it once a minute, so its trace moves by repaints alone, with no redraw between.
  */
-export function clockFace(agents: Agent[], inbox: Message[], now: number, traces: Record<string, readonly number[]> = {}) {
+export function clockFace(agents: Agent[], inbox: Message[], now: number, traces: Record<string, readonly number[]> = {}, bursts: Record<string, readonly Burst[]> = {}) {
   const v = { now } as View
   const live = new Set(agents.filter(a => LIVE.has(a.status)).map(a => a.id))
   const busy = spectrum(Object.fromEntries(Object.entries(traces).filter(([id]) => live.has(id))), now, 40).map(p => `${p.id}=${p.cells}`)
-  return [...agents.map(a => `${a.id}:${when(a, v)}`), ...inbox.map(m => `${m.id}:${age(now - m.at)}`), ...busy].join(' ')
+  const speeds = [...live].map(id => `${id}~${speed(bursts[id] ?? [], now) ?? ''}`)
+  return [...agents.map(a => `${a.id}:${when(a, v)}`), ...inbox.map(m => `${m.id}:${age(now - m.at)}`), ...busy, ...speeds].join(' ')
 }
 
 // Primitives
@@ -211,6 +214,25 @@ function Trace({ els, v, a, k, cells, rows = 1 }: { els: Els; v: View; a: Agent;
   return (
     <Box width={cells} flexShrink={0} flexDirection="column">
       {bars(counts, rows).map((line, i) => <Text key={`${k}-${i}`} color={moving ? undefined : 'subtle'}>{line}</Text>)}
+    </Box>
+  )
+}
+
+/** Wide enough for `1.2k t/s`. */
+const SPEED_COLUMNS = 8
+
+/**
+ * How fast an agent's tokens arrive, beside its trace: the figure in its colour, `–` while nothing
+ * has streamed in the last minute. In a row it holds a fixed column, right-aligned, so figures line up.
+ */
+function Speed({ els, v, a, column }: { els: Els; v: View; a: Agent; column?: boolean }) {
+  const { Box, Text } = els
+  const n = speed(v.bursts?.[a.id] ?? [], v.at)
+  return (
+    <Box key={`rate-${a.id}`} width={column ? SPEED_COLUMNS : undefined} flexShrink={0} justifyContent="flex-end">
+      {n === undefined
+        ? <Text color="subtle">–</Text>
+        : <Text><Text color={hue(a.id)}>{n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`}</Text><Text color="subtle"> t/s</Text></Text>}
     </Box>
   )
 }
@@ -294,8 +316,10 @@ function Row({ els, s, v, act, columns, cells }: { els: Els; s: Strip; v: View; 
           <Button key={`open-${a.id}`} plain dimColor label="›" hover={{ bold: true, scope }} onPress={() => act.inspect(a.id)} />
         </Box>
       </Box>
-      <Box paddingLeft={2} paddingRight={2}>
-        <Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text>
+      {/* The second line: what it is on, and under its time, how fast its tokens arrive. */}
+      <Box paddingLeft={2} paddingRight={2} columnGap={1}>
+        <Box flexGrow={1} flexShrink={1}><Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text></Box>
+        {!ended && <Speed els={els} v={v} a={a} column />}
       </Box>
       </Box>
       {!ended && v.composing !== a.id && <HoverActions els={els} v={v} a={a} act={act} right={2} />}
@@ -581,7 +605,12 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
       )}
 
       {/* One row: stacked rows of bars break apart at the terminal's line spacing. */}
-      {live && <Trace els={els} v={v} a={a} k={`trace-big-${a.id}`} cells={16} />}
+      {live && (
+        <Box columnGap={2}>
+          <Trace els={els} v={v} a={a} k={`trace-big-${a.id}`} cells={16} />
+          <Speed els={els} v={v} a={a} />
+        </Box>
+      )}
 
       <Box flexDirection="column" gap={1}>
         {brief && (
@@ -738,6 +767,7 @@ function WideRow({ els, s, v, act, name }: { els: Els; s: Strip; v: View; act: A
         {older && <Text color="warning"> ◷</Text>}
       </Box>
       <Trace els={els} v={v} a={a} k={`trace-${a.id}`} cells={8} />
+      <Box marginLeft={1} flexShrink={0}><Speed els={els} v={v} a={a} column /></Box>
       <Box flexGrow={1} flexShrink={1} marginLeft={2}><Text color="subtle" wrap="truncate-end">{headlineOf(a, v.now)}</Text></Box>
       <Box width={6} flexShrink={0} justifyContent="flex-end"><Text color="subtle">{when(a, v)}</Text></Box>
       <Box marginLeft={1} flexShrink={0}>

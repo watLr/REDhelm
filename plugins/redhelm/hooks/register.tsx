@@ -1,12 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, HookStream, Register, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types'
 import { DEFAULTS, LINES, activity, appearance, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
-import { BUCKET_MS, BUCKETS, isMoving, record, spectrum, traceRaster } from './trace'
+import { BUCKET_MS, BUCKETS, burst, isMoving, record, spectrum, traceRaster, type Burst } from './trace'
 import { Alert, Backdropped, Panel, Sheet, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
 
 type $ = EngineInterface
@@ -568,6 +568,8 @@ async function takeDraft($: $) {
 
 /** Each agent's tool call times over the last minute: its trace. Visual only; a reload starts it flat. */
 const traces = new Map<string, number[]>()
+/** Each agent's responses over the last minute, timed: how fast its tokens arrive. A reload starts it empty. */
+const bursts = new Map<string, Burst[]>()
 /** The Rasters each site drew, by key, with the cells last sent: the frame loop repaints only what changed. */
 const sites = new Map<string, Map<string, TraceSpec>>()
 /** Whether REDhelm is on screen (its pane shown, or the bar above the prompt); checked once a second. */
@@ -624,7 +626,7 @@ async function tick($: $) {
   await pace($)
   if (!visible) return
   const at = await $.clock.now()
-  const face = clockFace(Object.values(await read($, agents)), await read($, inbox), at, Object.fromEntries(traces))
+  const face = clockFace(Object.values(await read($, agents)), await read($, inbox), at, Object.fromEntries(traces), Object.fromEntries(bursts))
   if (!was || face !== shownFace) {
     shownFace = face
     await update($, now, () => at)
@@ -832,10 +834,36 @@ async function view($: $, site?: string): Promise<View> {
     root,
     lanes: { ...tagged, ...laneNames(list) },
     traces: Object.fromEntries(traces),
+    bursts: Object.fromEntries(bursts),
     at: await $.clock.now(),
     motion: cfg.motion === 'on',
     mount: site ? (key, spec) => void mounted.set(key, spec) : undefined,
   }
+}
+
+/**
+ * An agent's response, passed on piece by piece and timed from its first piece (a thinking block's
+ * start counts: its tokens do) to its stop, less any time the API spent running its own tools.
+ * The clock is read without waiting on it, so nothing streams slower.
+ */
+async function* timed($: $, agentId: string, stream: HookStream<TurnStepChunk, TurnStepResult>) {
+  let first: Promise<number> | undefined
+  let stop: Promise<number> | undefined
+  for await (const chunk of stream) {
+    first ??= $.clock.now()
+    if (chunk.kind === 'stop') stop ??= $.clock.now()
+    yield chunk
+  }
+  const result = await stream.result
+  await quietly(async () => {
+    const tokens = result.usage?.output_tokens ?? 0
+    if (!tokens || !first || !stop) return
+    const [from, to] = await Promise.all([first, stop])
+    const aside = (result.serverToolUses ?? []).reduce((n, u) => n + (u.endedAt === undefined ? 0 : Math.max(0, u.endedAt - u.startedAt)), 0)
+    const ms = to - from - aside
+    if (ms > 0) bursts.set(agentId, burst(bursts.get(agentId) ?? [], { at: to, tokens, ms }))
+  })
+  return result
 }
 
 async function show($: $) {
@@ -854,6 +882,7 @@ export const register: Register = (on, options) => {
     hasPython = undefined
     answeredAt.clear()
     traces.clear()
+    bursts.clear()
     sites.clear()
     ripples.length = 0
     backdropSite = undefined
@@ -994,7 +1023,7 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     if (!active) return yield* next(e)
-    const result = yield* next(e)
+    const result = e.agentId ? yield* timed($, e.agentId, next(e)) : yield* next(e)
     await quietly(async () => {
       const u = result.usage
       const context = u ? u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens : 0

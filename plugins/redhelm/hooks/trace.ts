@@ -33,6 +33,30 @@ export function buckets(times: readonly number[], now: number, n = BUCKETS): num
 export const isMoving = (times: readonly number[], now: number) =>
   times.some(t => t <= now && now - t < BUCKET_MS * 8)
 
+/** One response an agent streamed: when it ended, the output tokens it carried, and how long they took to arrive. */
+export type Burst = { at: number; tokens: number; ms: number }
+
+const SPEED_MS = 60_000
+
+/** The responses worth keeping after one more: the last minute's, at most 100. */
+export const burst = (bursts: readonly Burst[], b: Burst) =>
+  [...bursts.filter(x => b.at - x.at < SPEED_MS), b].slice(-100)
+
+/**
+ * How fast an agent's tokens arrive: output tokens a second while streaming, pooled over the last
+ * minute so one short response doesn't swing it. Undefined when nothing streamed, or too briefly to time.
+ */
+export function speed(bursts: readonly Burst[], now: number): number | undefined {
+  let tokens = 0
+  let ms = 0
+  for (const b of bursts) {
+    if (b.at > now || now - b.at >= SPEED_MS) continue
+    tokens += b.tokens
+    ms += b.ms
+  }
+  return tokens > 0 && ms >= 250 ? Math.round(tokens / (ms / 1000)) : undefined
+}
+
 /** Eighths of a cell, bottom up: one bar level each. */
 const LEVELS = '▁▂▃▄▅▆▇█'
 

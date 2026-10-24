@@ -9,7 +9,7 @@ import { appearance, grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstA
 } from '../hooks/model'
 import { workspaces, type Io } from '../hooks/sources'
 import { label, rack, relevant, shortName, summary, type View } from '../hooks/view'
-import { bars, buckets, mix, rasterCells, record, spectrum, tail } from '../hooks/trace'
+import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail } from '../hooks/trace'
 import { clean, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 
@@ -1063,6 +1063,15 @@ describe('traces', () => {
     expect(record([0, 70_000], 70_500)).toEqual([70_000, 70_500])
   })
 
+  test('speed: output tokens over the seconds they took to stream, pooled over the last minute', () => {
+    const two = burst(burst([], { at: 10_000, tokens: 120, ms: 2_000 }), { at: 20_000, tokens: 50, ms: 500 })
+    expect(speed(two, 20_000)).toBe(68) // 170 tokens in 2.5 s
+    expect(speed(two, 75_000)).toBe(100) // the first has aged out
+    expect(speed(two, 81_000)).toBeUndefined() // nothing streamed in the last minute
+    expect(burst(two, { at: 79_000, tokens: 1, ms: 1 }).length).toBe(2) // the first has aged out
+    expect(speed([{ at: 0, tokens: 3, ms: 20 }], 0)).toBeUndefined() // too quick to time
+  })
+
   test('bars rise from a flat baseline, one bucket a cell', () => {
     expect(bars([0, 0, 1, 4])).toEqual(['▁▁▃█'])
     expect(bars([0, 8], 2)).toEqual([' █', '▁█'])
@@ -1256,6 +1265,36 @@ describe('the live list', () => {
     expect(await ui.find({ type: 'Raster', key: 'trace-a1' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^[▁-█]{8}$/ })).toBeDefined()
     await ui.unmount()
+  })
+
+  test("each agent shows how fast its tokens arrive beside its trace: in the sidebar, the bar and its sheet", async ($: any, on: any) => {
+    const usage = { input_tokens: 10, output_tokens: 140, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' }
+    on('turn.step', async function* (_: any, e: any) {
+      yield { kind: 'thinking', index: 0, text: 'Plan' } // thinking tokens count, so its time does too
+      await clock.advance(3_000)
+      yield { kind: 'text', index: 1, text: 'Done.' }
+      yield { kind: 'stop', stopReason: 'end_turn', usage }
+      // A second of it the API spent running its own tool: not streaming.
+      return { turnId: e.turnId, index: e.index, answer: 'Done.', toolUses: [], stopReason: 'end_turn', usage,
+        serverToolUses: [{ id: 's1', name: 'advisor', input: {}, startedAt: 500, endedAt: 1_500 }] }
+    })
+    await engine(on, true, { shown: true })($)
+    await spawn($)
+    await edit($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await ui.find({ key: 'rate-a1' }))?.text).toBe('–') // nothing streamed yet
+    const step = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 1, agentId: 'a1' })
+    for await (const _ of step) { /* read to the end */ }
+    await step.result
+    await clock.advance(1_100) // the next tick redraws it
+    expect((await ui.find({ key: 'rate-a1' }))?.text).toBe('70 t/s') // 140 tokens in 2 s
+    const sheet = await openSheet($, ui, 'a1')
+    expect((await sheet.find({ key: 'rate-a1' }))?.text).toBe('70 t/s')
+    await sheet.unmount()
+    await ui.unmount()
+    const bar = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, placement: 'inline', bodyColumns: 140 } })
+    expect((await bar.find({ key: 'rate-a1' }))?.text).toBe('70 t/s')
+    await bar.unmount()
   })
 
   test('while shown, a moving trace is repainted in place between redraws, and a finished agent is not', async ($: any, on: any) => {
