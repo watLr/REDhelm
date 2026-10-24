@@ -1,6 +1,6 @@
 {
   "name": "redhelm",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "A live control panel for your Claude Code agents: activity traces, questions that wait for you, an agent sheet with Message and Stop, and a model guard.",
   "author": {
     "name": "watLr",

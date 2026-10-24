@@ -21,7 +21,7 @@ Restart running sessions (`/restart`), then run `/redhelm` once to open it. Afte
 
 ## Features
 
-- **Live agent list:** each agent's state, name, activity trace and run time, in its own colour
+- **Live agent list:** each agent's state, name, activity trace, run time and token rate, in its own colour
 - **Questions first:** an agent that asks you something gets an amber card with **Reply**
 - **Agent sheet:** click an agent for its task, steps, files, model and last words, with **Message** and **Stop**
 - **Headlines:** a few words under each agent, from Claude Code's small model, or plain words if you prefer

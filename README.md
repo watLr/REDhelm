@@ -30,7 +30,7 @@ claude plugin install redhelm@redhelm
 
 **What you should see:**
 
-- a row for each agent as it starts: `▶`, its name, a trace of its tool calls that moves as it works, and how long it has run
+- a row for each agent as it starts: `▶`, its name, a trace of its tool calls that moves as it works, how long it has run, and how fast its tokens arrive
 - a few words under each name saying what it is doing
 - a ring through the background with each tool call
 - each agent turning `✓` as it finishes, folding into **Finished**
@@ -51,7 +51,7 @@ Click a row for that agent's sheet: its task, steps, files and model, with **Mes
   https://github.com/user-attachments/assets/… link it writes, and paste it on its own line here.
 -->
 
-- **Live agent list.** One aligned row per agent: its state, name, a trace of its tool calls, and how long it has run.
+- **Live agent list.** One aligned row per agent: its state, name, a trace of its tool calls, how long it has run, and how fast its tokens arrive.
 - **Questions first.** An agent that asks you something gets an amber card with **Reply**, at the top.
 - **Plain words.** A short headline under each agent, written by Claude Code's small model.
 - **One click deep.** Click an agent for its task, steps, files, model and last words.
@@ -66,7 +66,7 @@ Click a row for that agent's sheet: its task, steps, files and model, with **Mes
 
 <img src="docs/images/redhelm-live.gif" alt="REDhelm live: activity traces grow, rings cross the background, an agent finishes" width="330" align="right">
 
-Each agent has its own colour: a stripe down its row, and a trace of its tool calls over the last half minute, brightest at the newest call and fading into the past. The trace moves while the agent works and flattens when it goes quiet. Under REDhelm's name, a thin line in the same colours shows each working agent's share of the last minute's calls, so the busiest one is the longest.
+Each agent has its own colour: a stripe down its row, and a trace of its tool calls over the last half minute, brightest at the newest call and fading into the past. The trace moves while the agent works and flattens when it goes quiet. Under the time, in the same colour, is how fast the agent's tokens arrive (`240 t/s`): output tokens over the seconds they took to stream, over the last minute; a dim `–` when nothing streamed. Under REDhelm's name, a thin line in the same colours shows each working agent's share of the last minute's calls, so the busiest one is the longest.
 
 | Glyph | State |
 |:---:|---|
@@ -93,7 +93,7 @@ REDhelm tells a question from a report: Claude Code's small model reads each mes
 
 Click an agent to open its sheet in place of the list:
 
-- its activity over the last minute
+- its activity over the last minute, and how fast its tokens arrive
 - **Message** and **Stop**, first, so they're never scrolled away
 - the task it was given (with **More** for the whole brief)
 - its latest steps, with how long ago
