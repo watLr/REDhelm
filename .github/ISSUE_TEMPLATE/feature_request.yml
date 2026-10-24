@@ -1,0 +1,35 @@
+name: Feature request
+description: An idea that would make REDhelm more useful
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you're trying to do
+      description: The moment where REDhelm falls short today. What were you doing, and what did you want to know or do?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: What you'd like REDhelm to show or do. A sketch or screenshot is welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it would live
+      multiple: true
+      options:
+        - The sidebar
+        - The bar above the prompt
+        - An agent's sheet
+        - The status line
+        - A command or setting
+        - Not sure
+  - type: textarea
+    id: else
+    attributes:
+      label: Anything else
+      description: Other tools that do this well, workarounds you use now, or why it matters to you.

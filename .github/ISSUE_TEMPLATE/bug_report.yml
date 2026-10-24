@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in REDhelm doesn't work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Issues are public: leave out your name, paths from your home folder, project names, prompts and usage limits.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps, starting from a fresh Claude Code session if you can.
+      placeholder: |
+        1. Start Claude Code and run /redhelm
+        2. Ask Claude to start two background agents
+        3. Click …
+    validations:
+      required: true
+  - type: input
+    id: redhelm
+    attributes:
+      label: REDhelm version
+      description: "`claude plugin list` shows it, beside redhelm@…"
+      placeholder: "0.7.1"
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      description: "`claude --version`"
+      placeholder: "2.1.310"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Linux, Windows, Other]
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      placeholder: "iTerm2, Ghostty, Terminal, Windows Terminal, VS Code's terminal …"
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where REDhelm was
+      options:
+        - Sidebar on the right
+        - Bar above the prompt
+        - It didn't appear
+        - Not sure
+  - type: dropdown
+    id: layout
+    attributes:
+      label: Claude Code layout
+      description: "Fullscreen is what `/tui fullscreen` turns on."
+      options:
+        - Fullscreen
+        - Classic
+        - Not sure
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug lines (optional)
+      description: |
+        Start Claude Code with `claude --debug-file redhelm-debug.txt`, make it happen again, and paste the lines that start with `redhelm:`. Read them first and remove anything private.
+      render: text
+  - type: textarea
+    id: shot
+    attributes:
+      label: Screenshot (optional)
+      description: Drag an image here. Crop out anything private.

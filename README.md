@@ -13,20 +13,43 @@ See what every agent is doing, answer the ones that need you, and know which mod
 
 </div>
 
-## Install
+## Try it in 2 minutes
+
+**1. Install it.**
 
 ```sh
 claude plugin marketplace add watLr/redhelm
 claude plugin install redhelm@redhelm
 ```
 
-Then restart running sessions (`/restart`). REDhelm opens by itself when agents start, or run `/redhelm`.
+**2. Open it.** Start Claude Code in any project, in a terminal at least 110 columns wide (or `/restart` a session that is already running), and run `/redhelm`. The sidebar opens on the right. If it opens above the prompt instead, run `/tui fullscreen`. From then on, REDhelm opens by itself when agents start.
+
+**3. Give Claude work for a few agents.** For example:
+
+> Start three background agents: one summarizes the README, one lists the TODO comments in the code, one reviews the tests. Tell me when all three are done.
+
+**What you should see:**
+
+- a row for each agent as it starts: `▶`, its name, a trace of its tool calls that moves as it works, and how long it has run
+- a few words under each name saying what it is doing
+- a ring through the background with each tool call
+- each agent turning `✓` as it finishes, folding into **Finished**
+
+Click a row for that agent's sheet: its task, steps, files and model, with **Message** and **Stop**. If an agent asks you something, an amber card with **Reply** appears at the top.
 
 **Needs:** Claude Code 2.1.289 or newer. The sidebar needs the fullscreen layout (`/tui fullscreen`) and a terminal at least 110 columns wide; otherwise REDhelm sits above the prompt.
 
 ## At a glance
 
-<img src="docs/images/redhelm-live.gif" alt="REDhelm live: activity traces grow, rings cross the background, an agent finishes" width="360" align="right">
+<p align="center"><a href="docs/media/redhelm-demo.mp4"><img src="docs/images/redhelm-demo.gif" alt="Demo: four agents start and REDhelm opens beside the conversation; one agent's sheet opens; another asks whether deleted notes should go to a trash folder, and the answer goes back with Reply; the agents finish" width="920"></a></p>
+<p align="center"><sub>Four agents, one question, answered from the sidebar. Waits play faster, with a speed badge. <a href="docs/media/redhelm-demo.mp4">MP4</a></sub></p>
+
+<!--
+  Demo video. The GIF above plays everywhere, including the plugin directory. To show the MP4 as a
+  video player on GitHub as well: drag docs/media/redhelm-demo.mp4 (or a new recording, under 10 MB)
+  into any GitHub comment box. The upload starts at once, and nothing needs to be posted. Copy the
+  https://github.com/user-attachments/assets/… link it writes, and paste it on its own line here.
+-->
 
 - **Live agent list.** One aligned row per agent: its state, name, a trace of its tool calls, and how long it has run.
 - **Questions first.** An agent that asks you something gets an amber card with **Reply**, at the top.
@@ -37,11 +60,11 @@ Then restart running sessions (`/restart`). REDhelm opens by itself when agents 
 - **A live background.** Each tool call sends a ring through the sidebar in its agent's colour.
 - **Light and dark.** Follows Claude Code's theme.
 
-<br clear="right">
-
 ## What you see
 
 ### Every agent is a live signal
+
+<img src="docs/images/redhelm-live.gif" alt="REDhelm live: activity traces grow, rings cross the background, an agent finishes" width="330" align="right">
 
 Each agent has its own colour: a stripe down its row, and a trace of its tool calls over the last half minute, brightest at the newest call and fading into the past. The trace moves while the agent works and flattens when it goes quiet. Under REDhelm's name, a thin line in the same colours shows each working agent's share of the last minute's calls, so the busiest one is the longest.
 
@@ -55,6 +78,8 @@ Each agent has its own colour: a stripe down its row, and a trace of its tool ca
 | `✕` | failed or stopped |
 
 The header counts them (`⚑ 1  ▶ 3  ✓ 2`). Finished agents fold into one line until you want them.
+
+<br clear="right">
 
 ### Questions that wait for you
 
@@ -189,6 +214,8 @@ claude --plugin-dir ./plugins/redhelm   # try a working copy without installing
 ```
 
 REDhelm is a Claude Code plugin built on function hooks: [`hooks/register.tsx`](plugins/redhelm/hooks/register.tsx) wires the events, [`hooks/view.tsx`](plugins/redhelm/hooks/view.tsx) draws the panel, and the traces and backgrounds are pure modules ([`trace.ts`](plugins/redhelm/hooks/trace.ts), [`backdrop.ts`](plugins/redhelm/hooks/backdrop.ts)) repainted in place on the terminal. The design notes live in [`docs/superpowers`](docs/superpowers).
+
+Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
