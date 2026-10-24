@@ -31,7 +31,7 @@ Restart running sessions (`/restart`), then run `/redhelm` once to open it. Afte
 
 ## Privacy and cost
 
-REDhelm reads your project folder and Claude Code's session data on your machine, and keeps what it remembers there too. It checks GitHub a few times a day for a newer version, sending nothing about you. Headlines are short requests to Claude Code's small model that count toward your usage; set **Labels** to plain in `/config` to turn them off. The details are in the [main README](https://github.com/watLr/redhelm#privacy-and-cost).
+REDhelm reads your project folder and Claude Code's session data on your machine, and keeps what it remembers there too. Installed from its own marketplace, it checks GitHub a few times a day for a newer version, sending nothing about you; from the plugin directory, the directory's updates apply instead. Headlines are short requests to Claude Code's small model that count toward your usage; set **Labels** to plain in `/config` to turn them off. The details are in the [main README](https://github.com/watLr/redhelm#privacy-and-cost).
 
 ## More
 

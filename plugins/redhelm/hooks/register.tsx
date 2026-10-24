@@ -71,6 +71,16 @@ async function patch($: $, id: string, fn: (a: Agent) => Partial<Agent>) {
   })
 }
 
+/**
+ * Whether a loop's events belong to an agent REDhelm shows: one it saw start, or one Claude Code
+ * lists. The engine's own forks (compaction, memory, suggestions) carry ids no list names; without
+ * this they turned up as an unnamed agent that never did anything.
+ */
+async function ourAgent($: $, id: string) {
+  if ((await $.state.get(AGENTS)).value?.[id]) return true
+  return (await $.agent.list()).some(a => a.id === id)
+}
+
 async function note($: $, n: Omit<Note, 'at'>) {
   const at = await $.clock.now()
   await update($, notes, list => [...list, { ...n, at }].slice(-40))
@@ -237,10 +247,17 @@ async function received($: $, from: string, raw: string) {
 
 /** Where the published REDhelm says its version. */
 const MANIFEST = 'https://raw.githubusercontent.com/watLr/redhelm/main/plugins/redhelm/.claude-plugin/plugin.json'
+/** REDhelm's own marketplace, the one that publishes MANIFEST: `redhelm@redhelm`. */
+const MARKET = 'redhelm'
+const fromMarket = (id: string) => id.split('@')[1] ?? ''
 const CHECK_EVERY = 6 * 3_600_000
 const CHECK_SHARED_MS = 3_600_000
 
-/** Compares the installed REDhelm with the published one. A copy run from a local folder is its own source: nothing to offer. */
+/**
+ * Compares the installed REDhelm with the published one. Only a copy from REDhelm's own marketplace
+ * is offered it: a local folder is its own source, and another marketplace (the plugin directory)
+ * ships the version it chose and updates it itself.
+ */
 async function checkRelease($: $) {
   // One check serves every open session for an hour: they share REDhelm's store.
   const at = await $.clock.now()
@@ -251,7 +268,7 @@ async function checkRelease($: $) {
     const mine = (JSON.parse(listed.stdout) as { id: string; version: string }[]).find(p => p.id.startsWith('redhelm@'))
     if (!mine) return update($, release, () => null)
     let latest = ''
-    if (!mine.id.endsWith('@inline')) {
+    if (fromMarket(mine.id) === MARKET) {
       const got = await $.http.fetch(MANIFEST)
       if (!got.ok) return
       latest = String((JSON.parse(got.text) as { version?: unknown }).version ?? '')
@@ -260,7 +277,7 @@ async function checkRelease($: $) {
     await $.store.set('release', seen)
   }
   const { id, installed, latest } = seen
-  if (id.endsWith('@inline')) return update($, release, () => null)
+  if (fromMarket(id) !== MARKET) return update($, release, () => null)
   await update($, release, was =>
     was?.state === 'updated' || was?.state === 'updating' ? was
       : isNewer(latest, installed) ? { id, installed, latest } : null)
@@ -269,7 +286,13 @@ async function checkRelease($: $) {
 /** Runs Claude Code's own plugin update; the new version loads on /reload-plugins or a restart. */
 async function updateNow($: $): Promise<string> {
   const rel = await read($, release)
-  if (!rel) return 'REDhelm is up to date'
+  if (!rel) {
+    const kept = (await $.store.get('release')) as { id?: string } | undefined
+    const market = fromMarket(kept?.id ?? '')
+    if (market === 'inline') return 'REDhelm runs from a local folder · update it there'
+    if (market && market !== MARKET) return `REDhelm comes from ${market}, which keeps it up to date · claude plugin update ${kept!.id}`
+    return 'REDhelm is up to date'
+  }
   if (rel.state === 'updating') return `REDhelm is already updating to ${rel.latest}`
   if (rel.state === 'updated') return `REDhelm ${rel.latest} is installed · run /reload-plugins to load it`
   await update($, release, (r): Release | null => r && { ...r, state: 'updating', detail: undefined })
@@ -389,9 +412,46 @@ const LINE_KEYS = new Set<string>(LINES.map(l => l.key))
 
 const home = async ($: $) => (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
 
-/** The command for one of REDhelm's shipped status lines, from wherever REDhelm is installed. */
-const lineCommand = ($: $, script: string) =>
-  `python3 "${$.plugin.root.replace(/[\\/]\.claude-plugin$/, '')}/statusline/${script}"`
+/**
+ * Where REDhelm's status line scripts run from once applied: copies beside their state, not the
+ * plugin's own folder, whose path names its version and goes away after an update.
+ */
+const linesDir = async ($: $) => `${await home($)}/.claude/redhelm/statusline`
+const SCRIPTS = ['statusline.py', 'agents.py', 'common.py']
+
+/** The command for one of REDhelm's status lines. */
+const lineCommand = (dir: string, script: string) => `python3 "${dir}/${script}"`
+
+/** A status line an earlier REDhelm set up inside Claude Code's versioned plugin folder. */
+const STRANDED = /^python3 "[^"]*[\\/]plugins[\\/]cache[\\/][^"]*[\\/]statusline[\\/](statusline|agents)\.py"$/
+
+/** Makes the kept copies of the status line scripts this version's; writes only what changed. */
+async function shipLines($: $) {
+  const from = `${$.plugin.root.replace(/[\\/]\.claude-plugin$/, '')}/statusline`
+  const to = await linesDir($)
+  for (const name of SCRIPTS) {
+    const text = await $.fs.read(`${from}/${name}`)
+    const was = (await $.fs.exists(`${to}/${name}`)) ? await $.fs.read(`${to}/${name}`) : undefined
+    if (was !== text) await $.fs.write(`${to}/${name}`, text)
+  }
+}
+
+/**
+ * Keeps REDhelm's status lines working across updates: refreshes the copies they run, and moves a
+ * line an earlier REDhelm set up inside the versioned plugin folder to them. Lines of your own stay.
+ */
+async function keepLines($: $) {
+  const path = `${await home($)}/.claude/settings.json`
+  if (!(await $.fs.exists(path))) return
+  const json = JSON.parse((await $.fs.read(path)) || '{}') as Record<string, { command?: unknown } | undefined>
+  const dir = await linesDir($)
+  const command = (key: string) => (typeof json[key]?.command === 'string' ? (json[key]!.command as string) : '')
+  const kept = LINES.filter(l => command(l.key) === lineCommand(dir, l.script))
+  const stranded = LINES.filter(l => STRANDED.exec(command(l.key))?.[1] === l.script.replace('.py', ''))
+  if (!kept.length && !stranded.length) return
+  await shipLines($)
+  await writeLines($, stranded.map(l => ({ key: l.key, label: l.label, value: lineCommand(dir, l.script) })))
+}
 
 async function pythonRuns($: $) {
   if (hasPython === undefined) {
@@ -421,8 +481,9 @@ async function setupItems($: $, all = false): Promise<SetupItem[]> {
   })
   if (await pythonRuns($)) {
     const current = (await $.settings.read()) as Record<string, { command?: string } | undefined>
+    const dir = await linesDir($)
     for (const line of LINES) {
-      const command = lineCommand($, line.script)
+      const command = lineCommand(dir, line.script)
       if (current[line.key]?.command === command || skip.includes(line.key)) continue
       items.push({ key: line.key, label: current[line.key] ? `${line.label} (replaces your current one)` : line.label, value: command })
     }
@@ -451,6 +512,7 @@ async function applySetup($: $) {
   }
   const lines = items.filter(i => LINE_KEYS.has(i.key))
   try {
+    if (lines.length) await shipLines($)
     await writeLines($, lines)
     applied += lines.length
   } catch {}
@@ -824,6 +886,7 @@ export const register: Register = (on, options) => {
       const ws = (await $.state.get(WORKSPACES)).value ?? []
       if (ws.length || ((await $.state.get(SETUP)).value ?? []).length) await show($)
     })
+    void quietly(() => keepLines($))
     return next(e)
   })
 
@@ -942,6 +1005,7 @@ export const register: Register = (on, options) => {
         return { ...all, [m]: { requests: row.requests + 1, output: row.output + (u?.output_tokens ?? 0), agents: row.agents + (e.agentId ? 1 : 0) } }
       })
       if (e.agentId) {
+        if (!(await ourAgent($, e.agentId))) return
         const said = excerpt(tidy(result.answer), 300)
         return patch($, e.agentId, a => ({ model: e.model, effort: effort ?? a.effort, context: context || a.context, thinking: said || a.thinking }))
       }
@@ -968,6 +1032,7 @@ export const register: Register = (on, options) => {
         ? { deny: `REDhelm: held because the session switched models on its own (${g.fallback}). Ask the person to run /model.` }
         : next(e)
     }
+    if (!(await ourAgent($, id))) return next(e)
     const input = e as unknown as Record<string, unknown>
     const now = await $.clock.now()
     traces.set(id, record(traces.get(id) ?? [], now))
@@ -1004,6 +1069,7 @@ export const register: Register = (on, options) => {
         }
         return
       }
+      if (!(await ourAgent($, id))) return
       const failed = e.reason === 'error' || e.reason === 'refusal'
       // A turn can end while work the agent started still runs (Claude Code lists it as waiting): not finished yet.
       const held = (await $.agent.list()).find(i => i.id === id)

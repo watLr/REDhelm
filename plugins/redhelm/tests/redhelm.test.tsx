@@ -342,26 +342,45 @@ describe('your REDhelm settings', () => {
   })
 
   test("setup ships REDhelm's status lines into settings.json and keeps the rest of the file", async ($: any, on: any) => {
-    let written = ''
+    const writes: Record<string, string> = {}
     on('config.list', () => ({ value: [] }))
     on('settings.read', () => ({ value: { statusLine: { type: 'command', command: 'old-line' } } }))
     on('process.run', () => ({ value: { exitCode: 0, stdout: 'Python 3', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
     on('env.get', () => ({ value: '/h' }))
-    on('fs.exists', () => ({ value: true }))
-    on('fs.read', () => ({ value: '{"theme":"dark","statusLine":{"type":"command","command":"old-line"}}' }))
-    on('fs.write', (_: any, e: any) => ((written = e.text ?? e[1] ?? ''), { value: undefined }))
+    on('fs.exists', (_: any, e: any) => ({ value: !e.path.startsWith('/h/.claude/redhelm/') }))
+    on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('.py') ? `# ${e.path.split('/').pop()}` : '{"theme":"dark","statusLine":{"type":"command","command":"old-line"}}' }))
+    on('fs.write', (_: any, e: any) => ((writes[e.path] = e.text), { value: undefined }))
     await engine(on, true)($)
     await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(writes['/h/.claude/settings.json']).toBeUndefined() // a line of your own is left alone
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: /under the prompt \(replaces your current one\)/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /agent panel/ })).toBeDefined()
     await ui.press({ key: 'setup-apply' })
     await new Promise<void>(r => setTimeout(() => r(), 40))
-    const json = JSON.parse(written)
+    const json = JSON.parse(writes['/h/.claude/settings.json']!)
     expect(json.theme).toBe('dark')
-    expect(json.statusLine.command).toMatch(/^python3 ".*\/statusline\/statusline\.py"$/)
-    expect(json.subagentStatusLine.command).toMatch(/statusline\/agents\.py"$/)
+    // They run from copies beside REDhelm's state, which an update does not move.
+    expect(json.statusLine.command).toBe('python3 "/h/.claude/redhelm/statusline/statusline.py"')
+    expect(json.subagentStatusLine.command).toBe('python3 "/h/.claude/redhelm/statusline/agents.py"')
+    expect(writes['/h/.claude/redhelm/statusline/common.py']).toBe('# common.py')
     await ui.unmount()
+  })
+
+  test('a status line an earlier REDhelm left in the versioned plugin folder moves to the kept copies', async ($: any, on: any) => {
+    const writes: Record<string, string> = {}
+    const old = 'python3 "/h/.claude/plugins/cache/redhelm/redhelm/0.7.1/statusline/statusline.py"'
+    on('config.list', () => ({ value: [] }))
+    on('settings.read', () => ({ value: {} }))
+    on('env.get', () => ({ value: '/h' }))
+    on('fs.exists', (_: any, e: any) => ({ value: e.path === '/h/.claude/settings.json' }))
+    on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('.py') ? `# ${e.path.split('/').pop()}` : JSON.stringify({ theme: 'dark', statusLine: { type: 'command', command: old } }) }))
+    on('fs.write', (_: any, e: any) => ((writes[e.path] = e.text), { value: undefined }))
+    await engine(on, true)($)
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    const json = JSON.parse(writes['/h/.claude/settings.json']!)
+    expect(json).toEqual({ theme: 'dark', statusLine: { type: 'command', command: 'python3 "/h/.claude/redhelm/statusline/statusline.py"' } })
+    expect(Object.keys(writes).filter(k => k.endsWith('.py')).sort()).toEqual(['agents.py', 'common.py', 'statusline.py'].map(n => `/h/.claude/redhelm/statusline/${n}`))
   })
 })
 
@@ -728,6 +747,24 @@ describe('agents that started before REDhelm', () => {
   })
 })
 
+describe("Claude Code's own background work", () => {
+  test('a fork of the session no list names (compaction, memory) gets no row, however much it does', async ($: any, on: any) => {
+    const toasts: string[] = []
+    on('agent.list', () => ({ value: [] }))
+    on('turn.complete', () => ({ text: '' }))
+    on('ui.toast', (_$: any, e: any) => { toasts.push(e.text); return { value: undefined } })
+    await engine(on, true)($)
+    await $.tool.call({ tool: 'Read', file_path: 'notes.md', agentId: 'fork1' } as any)
+    await $.turn.complete({ answer: 'No-op placeholder', durationMs: 900, isAborted: false, turnId: 't1', agentId: 'fork1', reason: 'answer' })
+    await clock.advance(3_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'sel-fork1' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Agent fork/ })).toBeUndefined()
+    expect(toasts).toEqual([])
+    await ui.unmount()
+  })
+})
+
 describe('an agent still waiting on work it started', () => {
   test('is not called finished until Claude Code says it ended', async ($: any, on: any) => {
     let status = 'waiting'
@@ -993,6 +1030,20 @@ describe('a newer REDhelm', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ key: 'update' })).toBeUndefined()
     await ui.unmount()
+  })
+
+  test('says nothing when another marketplace, such as the plugin directory, installed it: that one updates it', async ($: any, on: any) => {
+    let fetched = 0
+    on('process.run', () => installed('redhelm@claude-plugins-official', '0.4.5'))
+    on('http.fetch', () => (fetched++, published('0.5.0')))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'update' })).toBeUndefined()
+    await ui.unmount()
+    expect(fetched).toBe(0)
+    const r = await $.command.run({ command: 'redhelm', args: 'update', origin: { kind: 'person' }, presentation: {} } as any)
+    expect(r.text).toMatch(/comes from claude-plugins-official.*claude plugin update redhelm@claude-plugins-official/)
   })
 
   test('versions compare by number, not by text', () => {

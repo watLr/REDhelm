@@ -133,7 +133,7 @@ If your terminal is light but Claude Code's theme is dark, Claude Code draws dar
 - **Where work lands.** A warning when two live agents edit the same file.
 - **Workflows.** Shows progress from lane boards (`docs/aaa/board/lanes.json`), status boards (`.status-board/`), REDStudio (`.redstudio/`) and REDManager (`.redmanager/`) in the project.
 - **Long-turn notifications.** A desktop notification (macOS, Linux) when a long turn finishes.
-- **Updates.** When a newer REDhelm is published, a quiet line at the bottom of the panel offers **Update**. Nothing pops up.
+- **Updates.** When a newer REDhelm is published, a quiet line at the bottom of the panel offers **Update**. Nothing pops up. A copy installed from another marketplace, such as the plugin directory, is left to that marketplace's own updates.
 
 ## Commands
 
@@ -168,7 +168,7 @@ On first run REDhelm also offers a short setup card of Claude Code settings it r
 - pause instead of switching models when safeguards flag a message
 - show how long each turn took, and timestamp messages
 - push to your phone when a question is waiting (where available)
-- a status line with the model that actually answers and its effort, plus model and effort on each agent row (needs `python3`)
+- a status line with the model that actually answers and its effort, plus model and effort on each agent row (needs `python3`; the scripts are copied to `~/.claude/redhelm/statusline/`, so updates never break them)
 
 ## Troubleshooting
 
@@ -198,9 +198,9 @@ REDhelm follows Claude Code's theme, not the terminal's. Run `/theme` and pick l
 
 ## Privacy and cost
 
-REDhelm reads your project folder and Claude Code's own session data on your machine. What it remembers (model switches, the newest model versions seen, which setup items you handled) stays in Claude Code's plugin storage on your machine. It reaches out in two ways:
+REDhelm reads your project folder and Claude Code's own session data on your machine. What it remembers (model switches, the newest model versions seen, which setup items you handled) stays in Claude Code's plugin storage on your machine. If you apply its status lines, their scripts and a small state file live in `~/.claude/redhelm/`. It reaches out in two ways:
 
-- **Update check.** A few times a day it reads REDhelm's published version number from GitHub. It sends nothing about you or your work.
+- **Update check.** A few times a day it reads REDhelm's published version number from GitHub. It sends nothing about you or your work. Only a copy installed from REDhelm's own marketplace checks.
 - **Labels.** While REDhelm is on screen, it asks Claude Code's small model (Haiku, low effort) for short headlines and question titles. Each request carries an agent's task (first 300 characters), its latest steps and words, or a question an agent asked. It goes through Claude Code, to the same provider as the rest of your session, and counts toward your usage: a few hundred tokens each. One request at a time; an agent's headline is asked for again only when its steps change, at most every 45 seconds; no more than 30 requests an hour; answers are reused. `/redhelm models` shows what labels used. Set **Labels** to plain to turn them off.
 
 REDhelm runs only in interactive sessions (`claude -p`, the SDK and other headless runs are left alone), and if it ever errors, the call it was watching goes through unchanged.
