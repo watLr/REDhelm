@@ -883,16 +883,15 @@ export const register: Register = (on, options) => {
       const name = address[1]!.trim()
       const text = address[2]!.trim()
       if (!text) return { drop: `REDhelm: nothing to send to ${name}` }
-      const { isDelivered, reason } = await $.session.send({ to: { agentId: to }, text })
+      // Said as yours: the agent then reports your answer as yours, not as Claude's.
+      const { isDelivered, reason } = await $.session.send({ to: { agentId: to }, text: `From the user (via REDhelm): ${text}` })
       await update($, composing, () => null)
       if (!isDelivered) return { drop: `REDhelm: not delivered to ${name} (${reason ?? 'unknown reason'})` }
       await update($, inbox, list => list.filter(m => m.agentId !== to))
       await note($, { kind: 'reply', text: `you → ${name}: ${excerpt(text, 60)}`, agentId: to })
-      const draft = await takeDraft($)
-      if (draft !== null) {
-        // After Claude Code has cleared the prompt it just took.
-        $.clock.after(100, () => void $.prompt.fill({ text: draft, mode: 'replace' }))
-      }
+      // Claude Code keeps a dropped prompt's text: put back what you were writing to Claude, or nothing.
+      const draft = (await takeDraft($)) ?? ''
+      $.clock.after(100, () => void $.prompt.fill({ text: draft, mode: 'replace' }))
       return { drop: `→ ${name}: sent` }
     }
     // A prompt to Claude while a reply was open (its "→ name:" was deleted): the reply is over.

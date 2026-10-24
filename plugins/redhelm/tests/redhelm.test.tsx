@@ -389,9 +389,23 @@ describe('messaging an agent', () => {
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
     const r = await $.prompt.submit({ text: '→ docs: please also cover Windows' })
-    expect(sent.map(e => [e.to, e.text])).toEqual([['a1', 'please also cover Windows']])
+    expect(sent.map(e => [e.to, e.text])).toEqual([['a1', 'From the user (via REDhelm): please also cover Windows']])
     expect(r.drop).toMatch(/→ docs: sent/)
     expect((await $.prompt.submit({ text: 'an ordinary prompt' })).text).toBe('an ordinary prompt')
+  })
+
+  test('once sent, the prompt is empty again: Claude Code keeps the text of a prompt a hook took', async ($: any, on: any) => {
+    let box = ''
+    on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+    on('prompt.fill', (_: any, e: any) => ((box = e.text), { isFilled: true }))
+    on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
+    on('session.send', () => ({ isDelivered: true }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+    box = '→ docs: please also cover Windows'
+    await $.prompt.submit({ text: box })
+    await clock.advance(200)
+    expect(box).toBe('')
   })
 
   test('Message puts the address in your prompt, where your keyboard already is', async ($: any, on: any) => {
@@ -425,7 +439,7 @@ describe('messaging an agent', () => {
     await new Promise<void>(r => setTimeout(() => r(), 40))
     await ui.unmount()
     const r = await $.prompt.submit({ text: `${filled}Hi` })
-    expect(sent.map(e => [e.to, e.text])).toEqual([['a1', 'Hi']])
+    expect(sent.map(e => [e.to, e.text])).toEqual([['a1', 'From the user (via REDhelm): Hi']])
     expect(r.drop).toMatch(/sent/)
   })
 
@@ -495,7 +509,7 @@ describe('your draft is never sent to an agent', () => {
     expect(box).toBe('→ docs: ')
     await $.prompt.submit({ text: `${box}please also cover Windows` })
     await clock.advance(200)
-    expect(sent.map(e => e.text)).toEqual(['please also cover Windows'])
+    expect(sent.map(e => e.text)).toEqual(['From the user (via REDhelm): please also cover Windows'])
     expect(box).toBe('a note I was writing to Claude')
     await ui.unmount()
   })
@@ -540,7 +554,7 @@ describe('two agents with the same name', () => {
     await new Promise<void>(r => setTimeout(() => r(), 40))
     expect(box).toBe('→ asker a2: ')
     await $.prompt.submit({ text: `${box}yes` })
-    expect(sent.map(e => [e.to, e.text])).toEqual([['a2', 'yes']])
+    expect(sent.map(e => [e.to, e.text])).toEqual([['a2', 'From the user (via REDhelm): yes']])
     await ui.unmount()
   })
 })
