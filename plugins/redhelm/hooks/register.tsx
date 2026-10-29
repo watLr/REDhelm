@@ -10,8 +10,9 @@ import { BUCKET_MS, BUCKETS, burst, isMoving, record, spectrum, traceRaster, typ
 import { Alert, Backdropped, Panel, Sheet, WorkflowSheet, WorkflowsSection, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
 import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, widen,
   type Call, type Msg, type Reading, type Stretch, type TraceEvent } from './workflows'
-import { applyOps, listed, slug, toSaved, uniqueName } from './library'
-import { typeName } from './agentfile'
+import { EDIT_CALL, applyOps, checkOps, editRequest, itemCount, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
+  type Op } from './library'
+import { agentSpec, typeName } from './agentfile'
 
 type $ = EngineInterface
 
@@ -105,6 +106,25 @@ const nameOf = async ($: $, id: string) => labelOf((await $.state.get(AGENTS)).v
 
 /** A prompt addressed to an agent: "→ handle: message". */
 const ADDRESS = /^→ ([^:\n]+): ([\s\S]*)$/
+
+/** An edit of the open workflow draft: "✎ Workflow: the change". The mark alone asks for none. */
+const EDIT_MARK = /^✎ Workflow:(?:\s([\s\S]*))?$/
+const EDITING = '✎ Workflow: '
+
+/** Your notes after a run's mark, `▶ <name>: `: matched by the name Run chose, so a name may hold colons. Undefined without the mark. */
+function runNotes(text: string, name: string) {
+  const mark = `▶ ${name}:`
+  if (!text.startsWith(mark)) return undefined
+  const rest = text.slice(mark.length)
+  return !rest || /^\s/.test(rest) ? rest.trim() : undefined
+}
+
+/** Whether the box holds the mode's mark: then it is REDhelm's to replace, and no draft of yours. */
+const marked = (text: string, mode: NonNullable<WorkflowMode>) => (mode.kind === 'edit' ? EDIT_MARK.test(text) : runNotes(text, mode.name) !== undefined)
+
+/** Prompts that reach the hook without being typed in your box: they never end a workflow's mode or take its mark. */
+const BACKGROUND = new Set(['task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay', 'channel', 'coordinator',
+  'observer', 'observer-activity', 'auto-continuation', 'slack-ping', 'bridge', 'plugin'])
 
 /** The agent an address names, preferring one still running. */
 async function agentNamed($: $, name: string) {
@@ -784,7 +804,9 @@ async function projectTypes($: $, dir: string) {
     for (const f of entries) {
       const path = `${at}/${f.name}`
       if (f.kind === 'dir' && depth < AGENT_DEPTH) folders.push([path, depth + 1])
-      if (f.kind !== 'file' || !f.name.endsWith('.md') || files++ >= AGENT_FILES) continue
+      // A symbolic link to an agent file is the file: `$.fs.list` reports a link as `other`, and a read follows it.
+      const isFile = f.kind === 'file' || (f.kind === 'other' && f.isLink)
+      if (!isFile || !f.name.endsWith('.md') || files++ >= AGENT_FILES) continue
       const text = await $.fs.read(path).catch(() => undefined)
       const name = typeof text === 'string' ? typeName(text) : undefined
       if (name && !found.has(name)) found.set(name, text as string)
@@ -846,8 +868,9 @@ async function readForSave($: $, back: number): Promise<SaveRead> {
   return { draft: { ...draft, ...(await copyTypes($, [...calls, ...theirs], records, at)) }, trace: leadTrace(msgs, s), script: scriptsIn(msgs, s) }
 }
 
-/** Save (`back` 0) and Earlier: the sheet at once with what was seen, then the reading, which never holds it up. */
+/** Save (`back` 0) and Earlier: the sheet at once with what was seen, then the reading, which never holds it up. An edit of the draft it replaces ends. */
 async function startSave($: $, back: number) {
+  await leaveEdit($)
   const token = ++sheetToken
   let got: SaveRead
   try {
@@ -879,22 +902,34 @@ async function readLead($: $, token: number, asked: Draft, trace: readonly Trace
     s?.mode === 'review' && s.token === token && s.draft?.read === 'pending' ? { ...s, draft: applyReading(s.draft, reading, trace) } : s)
 }
 
+/** Where the library is kept, under the home folder: one file a workflow, beside REDhelm's status lines. */
+const LIBRARY = '.claude/redhelm/workflows'
+
+/** Why something failed, for a toast: one line, paths without the home folder, as everything REDhelm shows. */
+const failure = (err: unknown) => excerpt(tidy(err instanceof Error ? err.message : String(err)), 80) || 'unknown reason'
+
 /**
- * The draft written to the library: under a name no saved workflow has ("<name> 2"), as a file no file
- * in the folder has, so nothing is overwritten. A library folder not made yet holds nothing; one that
- * is there but cannot be listed is an error, never taken for empty.
+ * The library's folder and its `.json` files, each with its text, undefined when it could not be read.
+ * A folder not made yet holds none; one that is there but cannot be listed is an error, never taken for empty.
  */
-async function writeWorkflow($: $, d: Draft) {
+async function libraryFiles($: $) {
   const h = await home($)
   if (!h) throw new Error('no home folder to keep it in')
-  const dir = `${h}/.claude/redhelm/workflows`
+  const dir = `${h}/${LIBRARY}`
   const entries = await $.fs.list(dir).catch(async (err: unknown) => {
     if (await $.fs.exists(dir).catch(() => true)) throw err
     return []
   })
   const names = entries.filter(f => f.kind === 'file' && f.name.endsWith('.json')).map(f => f.name)
-  const files = await Promise.all(names.map(async n => ({ name: n, text: await $.fs.read(`${dir}/${n}`).then(t => (typeof t === 'string' ? t : ''), () => '') })))
-  const name = uniqueName(d.name.trim() || 'Workflow', listed(files, d.projectKey).workflows.map(w => w.name))
+  const files = await Promise.all(names.map(async name => ({ name, text: await $.fs.read(`${dir}/${name}`).then(t => (typeof t === 'string' ? t : undefined), () => undefined) })))
+  return { dir, files }
+}
+
+/** The draft written to the library: under a name no saved workflow has ("<name> 2"), as a file no file in the folder has, so nothing is overwritten. */
+async function writeWorkflow($: $, d: Draft) {
+  const { dir, files } = await libraryFiles($)
+  const names = files.map(f => f.name)
+  const name = uniqueName(d.name.trim() || 'Workflow', listed(files.map(f => ({ name: f.name, text: f.text ?? '' })), d.projectKey).workflows.map(w => w.name))
   const ids = new Set(names.map(n => n.slice(0, -'.json'.length).toLowerCase()))
   const base = slug(name)
   let id = base
@@ -903,31 +938,234 @@ async function writeWorkflow($: $, d: Draft) {
   return name
 }
 
-/** Save on the sheet. Pressed while the reading is out, it keeps what was seen. A write that fails says why and leaves the sheet open. */
+/**
+ * Save on the sheet. Pressed while the reading is out, it keeps what was seen; while an edit applies it
+ * waits for you to press it again, so the edit you asked for is never dropped. A write that fails says
+ * why and leaves the sheet open. A form with no items is never saved (the sheet offers no Save for either).
+ */
 async function keepWorkflow($: $) {
   const s = await read($, workflowSheet)
-  if (keeping || s?.mode !== 'review' || !s.draft) return
+  if (keeping || s?.mode !== 'review' || !s.draft || s.busy || !itemCount(s.draft)) return
   keeping = true
   let name: string
   try {
     name = await writeWorkflow($, s.draft.read === 'pending' ? applyReading(s.draft, undefined, []) : s.draft)
   } catch (err) {
-    // Paths in the reason lose the home folder, as everything REDhelm shows does.
-    $.ui.toast(`Couldn't save · ${excerpt(tidy(err instanceof Error ? err.message : String(err)), 80) || 'unknown reason'}`)
+    $.ui.toast(`Couldn't save · ${failure(err)}`)
     return
   } finally {
     keeping = false
   }
   sheetToken++
   await update($, workflowSheet, cur => (cur?.mode === 'review' && cur.token === s.token ? null : cur))
+  await leaveEdit($)
   $.ui.toast(`Saved · ${name}`)
 }
 
-/** Cancel, Back, Esc: the sheet goes, a reading still out is dropped, and an edit or run of a workflow ends. */
+/**
+ * Cancel, Back, Esc, the panel closing: the sheet goes, a reading or an edit still out is dropped, and an
+ * edit of its draft ends with your draft back in the box. A run waiting in the box is the box's, and stays.
+ */
 async function closeWorkflow($: $) {
   sheetToken++
   await update($, workflowSheet, () => null)
+  await leaveEdit($)
+}
+
+// Workflows: Edit and Run hold the prompt box the way Reply does, one mode at a time
+
+/**
+ * Ends a workflow's mode, as leaveReply ends a reply: what you were writing to Claude comes back, when the
+ * box still holds the mark (anything else typed there since is yours). `ends`: which modes this ends.
+ */
+async function leaveMode($: $, ends: (m: NonNullable<WorkflowMode>) => boolean) {
+  const mode = await read($, workflowMode)
+  if (!mode || !ends(mode)) return
   await update($, workflowMode, () => null)
+  const draft = (await takeDraft($)) ?? ''
+  if (marked(await $.prompt.read().then(p => p.text, () => ''), mode)) await $.prompt.fill({ text: draft, mode: 'replace' })
+}
+
+const leaveEdit = ($: $) => leaveMode($, m => m.kind === 'edit')
+
+/** An open reply ends before Edit or Run takes the box: its draft goes back into the box, to be kept again. */
+async function endReply($: $) {
+  if (await read($, composing)) await leaveReply($)
+}
+
+/**
+ * Edit or Run takes the prompt box: what it holds is kept as your draft (unless it is another mode's
+ * mark, whose kept draft is handed on), and `text` goes in. False, with a toast, where there is no box.
+ */
+async function takeBox($: $, text: string) {
+  const mode = await read($, workflowMode)
+  const box = await $.prompt.read().then(p => p.text, () => '')
+  const filled = await $.prompt.fill({ text, mode: 'replace' }).then(r => r.isFilled, () => false)
+  if (!filled) {
+    $.ui.toast('Could not reach the prompt')
+    return false
+  }
+  if (!(mode && marked(box, mode)) && box.trim()) await update($, draftKept, () => box)
+  return true
+}
+
+/** Edit: `✎ Workflow: ` in the box. Not while the reading is out: it names the items as they were when it was asked. */
+async function startEdit($: $) {
+  const s = await read($, workflowSheet)
+  if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending') return
+  await endReply($)
+  if (await takeBox($, EDITING)) await update($, workflowMode, (): WorkflowMode => ({ kind: 'edit' }))
+}
+
+/** Edits apply one after another: a second ✎ while one applies waits for it, and is asked of the draft it left. */
+let editing: Promise<void> = Promise.resolve()
+/** Edits asked for and not yet applied: the sheet shows `Applying…` until none is left. */
+let edits = 0
+
+/** One ✎: the sheet is busy at once (nothing else on it changes until the edits are in), and the change is asked after the edits before it. */
+async function queueEdit($: $, token: number, ask: string) {
+  await update($, workflowSheet, s => (s?.mode === 'review' && s.token === token ? { ...s, busy: 'applying' as const, error: undefined } : s))
+  edits++
+  editing = editing.then(() => quietly(async () => {
+    try {
+      await applyEdit($, token, ask)
+    } finally {
+      if (--edits === 0) await update($, workflowSheet, s => (s?.mode === 'review' && s.busy ? { ...s, busy: undefined } : s))
+    }
+  }))
+}
+
+/** An edit call that failed, timed out, or answered neither ops nor a reason. */
+const EDIT_FAILED = "Couldn't apply that edit"
+
+/**
+ * The edit call: Sonnet at low effort, answering ops, never a rewritten workflow; counted with the
+ * labels. Ops that all pass the checks apply, and the draft before them goes on the Undo stack; one that
+ * does not leaves the draft and says why in one line, as a refusal (`cannot`) does. No ops change
+ * nothing and leave nothing to undo. It lands only on the sheet it was asked of.
+ */
+async function applyEdit($: $, token: number, ask: string) {
+  const s = await read($, workflowSheet)
+  if (s?.mode !== 'review' || s.token !== token || !s.draft || s.draft.read === 'pending') return
+  let why: string | undefined
+  let ops: readonly Op[] = []
+  try {
+    const r = await $.model.complete({ ...EDIT_CALL, ...editRequest(s.draft, ask) }, { signal: stopLabels.signal })
+    counted(r)
+    const answer = r.isAnswered ? parseEdit(r.text) : undefined
+    if (!answer) why = EDIT_FAILED
+    else if ('cannot' in answer) why = answer.cannot
+    else ops = answer.ops
+  } catch {
+    why = EDIT_FAILED
+  }
+  await update($, workflowSheet, cur => {
+    if (cur?.mode !== 'review' || cur.token !== token || !cur.draft) return cur
+    const fault = why ?? checkOps(cur.draft, ops)
+    if (fault) return { ...cur, error: fault }
+    if (!ops.length) return { ...cur, error: undefined }
+    return { ...cur, draft: applyOps(cur.draft, ops), undo: [...cur.undo, cur.draft], detail: undefined, error: undefined }
+  })
+}
+
+/**
+ * Load: the library as its folder holds it now, this project's first, then newest; pressed again, the
+ * list goes. A file that cannot be read counts with those that do not parse; a blank (deleted) one does not.
+ */
+async function loadLibrary($: $) {
+  if (await read($, workflowList)) {
+    await update($, workflowList, () => null)
+    return
+  }
+  try {
+    const { files } = await libraryFiles($)
+    const got = listed(files.flatMap(f => (f.text === undefined ? [] : [{ name: f.name, text: f.text }])), projectKey(root || (await $.session.root())))
+    await update($, workflowList, () => ({ ...got, unreadable: got.unreadable + files.filter(f => f.text === undefined).length }))
+  } catch (err) {
+    $.ui.toast(`Couldn't read the library · ${failure(err)}`)
+  }
+}
+
+/** A saved workflow's sheet, from the library list. A review sheet it replaces goes, with its reading and any edit of it. */
+async function openWorkflow($: $, id: string) {
+  sheetToken++
+  await leaveEdit($)
+  await update($, workflowSheet, () => ({ mode: 'saved' as const, id }))
+}
+
+/**
+ * Run, before the box is filled: each copied type this project lacks, registered for the session as
+ * `redhelm:<name>`, with what of its file stays behind. What is here wins: a type of that name in the
+ * project's agent folder (subfolders too) or yours registers nothing, and the plan names it as it is. A
+ * file that does not parse or a spec the engine refuses is toasted, and the plan runs it as general-purpose.
+ */
+async function registerTypes($: $, w: SavedWorkflow) {
+  const registered: [string, string][] = []
+  const leftBehind: [string, string[]][] = []
+  if (w.types.length) {
+    const h = await home($)
+    const here = new Set([...(await projectTypes($, `${root || (await $.session.root())}/${AGENT_DIR}`)).keys(),
+      ...(h ? (await projectTypes($, `${h}/${AGENT_DIR}`)).keys() : [])])
+    for (const t of w.types) {
+      if (here.has(t.name) || registered.some(([name]) => name === t.name)) continue
+      const r = agentSpec(t.definition)
+      try {
+        if ('error' in r) throw new Error(r.error)
+        const { agent } = await $.agent.register({ ...r.spec })
+        registered.push([t.name, agent])
+        leftBehind.push([t.name, r.leftBehind])
+      } catch (err) {
+        $.ui.toast(`Couldn't add ${t.name} · ${failure(err)}`)
+        registered.push([t.name, 'general-purpose'])
+      }
+    }
+  }
+  // Built from entries: a type named like an Object method is still a type.
+  return { registered: Object.fromEntries(registered), leftBehind: Object.fromEntries(leftBehind) }
+}
+
+/** Run: copied types registered, then `▶ <name>: ` in the box, where your Enter is the go-ahead. A saved workflow's sheet steps aside for it. */
+async function runWorkflow($: $, id: string) {
+  const w = (await read($, workflowList))?.workflows.find(x => x.id === id)
+  if (!w) return
+  await endReply($)
+  const { registered, leftBehind } = await registerTypes($, w)
+  if (!(await takeBox($, `▶ ${w.name}: `))) return
+  await update($, workflowMode, (): WorkflowMode => ({ kind: 'run', id, name: w.name, registered, leftBehind }))
+  await update($, workflowSheet, s => (s?.mode === 'saved' ? null : s))
+}
+
+/** The workflow a run names: as Load listed it, or read again from its file once the list was put away. */
+async function savedFor($: $, id: string) {
+  const w = (await read($, workflowList))?.workflows.find(x => x.id === id)
+  if (w) return w
+  const h = await home($)
+  const got = h ? parseSaved(await $.fs.read(`${h}/${LIBRARY}/${id}.json`).catch(() => '')) : undefined
+  return got && { ...got, id }
+}
+
+/**
+ * Delete on a saved workflow's sheet: the first press asks, the second empties its file (the engine has no
+ * delete, and Load passes a blank file over). The list loses it, the sheet goes, and a run of it ends.
+ */
+async function deleteWorkflow($: $, id: string) {
+  const s = await read($, workflowSheet)
+  if (s?.mode !== 'saved' || s.id !== id) return
+  if (!s.armed) {
+    await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? { ...cur, armed: true } : cur))
+    return
+  }
+  try {
+    const h = await home($)
+    if (!h) throw new Error('no home folder')
+    await $.fs.write(`${h}/${LIBRARY}/${id}.json`, '')
+  } catch (err) {
+    $.ui.toast(`Couldn't delete · ${failure(err)}`)
+    return
+  }
+  await update($, workflowList, l => l && { ...l, workflows: l.workflows.filter(w => w.id !== id) })
+  await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? null : cur))
+  await leaveMode($, m => m.kind === 'run' && m.id === id)
 }
 
 // Drawing
@@ -973,11 +1211,14 @@ function actions($: $, inPane = false): Actions {
         // What you were typing to Claude is set aside, never sent to the agent; it comes back after.
         const text = (await $.prompt.read()).text
         const already = text.match(ADDRESS)
+        // One mode owns the box: a workflow's edit or run gives way. Its mark is no draft of yours; the draft it kept is handed on.
+        const mode = await read($, workflowMode)
         const handle = handles(Object.values((await $.state.get(AGENTS)).value ?? {}))[id] ?? 'agent'
         const { isFilled } = await $.prompt.fill({ text: `→ ${handle}: ${already ? already[2] : ''}`, mode: 'replace' })
         if (isFilled) {
+          if (mode) await update($, workflowMode, () => null)
           await update($, composing, () => id)
-          if (!already && text.trim()) await update($, draftKept, () => text)
+          if (!already && !(mode && marked(text, mode)) && text.trim()) await update($, draftKept, () => text)
         }
         else $.ui.toast('Could not reach the prompt; type → name: your message')
       })(),
@@ -999,18 +1240,29 @@ function actions($: $, inPane = false): Actions {
       const s = await read($, workflowSheet)
       if (s?.mode === 'review' && s.draft?.more) await startSave($, s.draft.back + 1)
     }),
-    wfForm: form => void quietly(() => update($, workflowSheet, s => (s?.mode === 'review' && s.draft ? { ...s, draft: { ...s.draft, form }, detail: undefined } : s))),
+    // An edit applying was asked of the form shown: the form waits for it.
+    wfForm: form => void quietly(() => update($, workflowSheet, s => (s?.mode === 'review' && s.draft && !s.busy ? { ...s, draft: { ...s.draft, form }, detail: undefined } : s))),
     wfDetail: d => void quietly(() => update($, workflowSheet, s => (s ? { ...s, detail: d ?? undefined } : s))),
     wfRemove: item => void quietly(() => update($, workflowSheet, s => {
-      // Nothing is removed while the reading is out: it names the agents and roles as they were when it was asked.
-      if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending' || s.busy) return s
+      // Nothing is removed while the reading is out (it names the agents and roles as they were when it was asked)
+      // or an edit applies, and the last item stays: a workflow of none is never saved.
+      if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending' || s.busy || itemCount(s.draft) <= 1) return s
       const next = applyOps(s.draft, [{ op: 'remove', item }])
-      return next === s.draft ? s : { ...s, draft: next, undo: [...s.undo, s.draft], detail: undefined }
+      return next === s.draft ? s : { ...s, draft: next, undo: [...s.undo, s.draft], detail: undefined, error: undefined }
     })),
     wfKeep: () => void quietly(() => keepWorkflow($)),
     wfClose: () => void quietly(() => closeWorkflow($)),
     // Opened inside the press, as the agent sheet is: a pane the person asked for is placed at any width.
     wfBar: () => void $.ui.open({ id: WORKFLOW_PANE, title: 'Workflows', focus: true, closeOnEscape: true, rows: 24 }).catch(() => {}),
+    wfEdit: () => void quietly(() => startEdit($)),
+    wfUndo: () => void quietly(() => update($, workflowSheet, s => {
+      if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending' || s.busy || !s.undo.length) return s
+      return { ...s, draft: s.undo[s.undo.length - 1]!, undo: s.undo.slice(0, -1), detail: undefined, error: undefined }
+    })),
+    wfLoad: () => void quietly(() => loadLibrary($)),
+    wfOpen: id => void quietly(() => openWorkflow($, id)),
+    wfRun: id => void quietly(() => runWorkflow($, id)),
+    wfDelete: id => void quietly(() => deleteWorkflow($, id)),
   }
 }
 
@@ -1114,6 +1366,8 @@ export const register: Register = (on, options) => {
     visible = false
     stopLabels = new AbortController()
     Object.assign(spent, { calls: 0, input: 0, output: 0 })
+    editing = Promise.resolve()
+    edits = 0
     shownStatus = null
     root = await $.session.root()
     homeDir = await home($).catch(() => '')
@@ -1191,6 +1445,50 @@ export const register: Register = (on, options) => {
   /** The guard at the door: a prompt waits while the model is not the one chosen, and once when the session fell behind. */
   on('prompt.submit', async ($, e, next) => {
     if (!active) return next(e)
+    /** The guard: why a prompt for Claude waits, or undefined to let it in. */
+    const held = async () => {
+      if (cfg.guard !== 'hold') return undefined
+      const g = (await $.state.get(GUARD)).value ?? {}
+      if (g.fallback) return `REDhelm: this session switched models on its own (${g.fallback}). Run /model to choose, then send again.`
+      if (g.stale && staleTold !== g.stale) {
+        staleTold = g.stale
+        return `REDhelm: this session runs ${short(g.model)}, but your default is now ${short(g.stale)}. Send again to keep ${short(g.model)}, or /model to switch.`
+      }
+      return undefined
+    }
+    // A workflow's mode owns the box: only a prompt you typed there answers it, never a notification or a peer's message.
+    const mode = !e.isMeta && !BACKGROUND.has(e.origin?.kind ?? '') ? await read($, workflowMode) : null
+    // ✎ edits the open draft and never reaches Claude; the change applies off this hook.
+    const edit = mode?.kind === 'edit' ? EDIT_MARK.exec(e.text) : null
+    if (edit) {
+      const ask = (edit[1] ?? '').trim()
+      // The mode stays, and Claude Code keeps the dropped text: the change can still be typed.
+      if (!ask) return { drop: 'REDhelm: nothing to change' }
+      await quietly(async () => {
+        await update($, workflowMode, () => null)
+        // Claude Code keeps a dropped prompt's text: what you were writing to Claude goes back once it has.
+        const draft = (await takeDraft($)) ?? ''
+        $.clock.after(100, () => void quietly(() => $.prompt.fill({ text: draft, mode: 'replace' })))
+        const s = await read($, workflowSheet)
+        if (s?.mode === 'review') await queueEdit($, s.token, ask)
+      })
+      return { drop: '✎ Workflow: applying' }
+    }
+    // ▶ runs the saved workflow Run chose: your notes as the prompt, the workflow as a plan beside it.
+    const notes = mode?.kind === 'run' ? runNotes(e.text, mode.name) : undefined
+    if (mode?.kind === 'run' && notes !== undefined) {
+      const w = await savedFor($, mode.id)
+      const why = w ? await held() : undefined
+      // Held by the guard, the run waits for you to send it again.
+      if (why) return { drop: why }
+      await update($, workflowMode, () => null)
+      const draft = await takeDraft($)
+      if (draft !== null) $.clock.after(100, () => void quietly(() => $.prompt.fill({ text: draft, mode: 'replace' })))
+      if (!w) return { drop: `REDhelm: couldn't read "${mode.name}" · Load it and press Run again` }
+      return next({ ...e, text: runText(mode.name, notes), context: [...(e.context ?? []), planText(w, mode.registered, mode.leftBehind)] })
+    }
+    // Anything else typed while a workflow held the box: its mark was deleted, so the mode is over.
+    if (mode) await update($, workflowMode, () => null)
     // A prompt addressed "→ name: …" goes to that agent instead of Claude.
     const address = e.text.match(ADDRESS)
     const to = address && (await agentNamed($, address[1]!))
@@ -1209,23 +1507,16 @@ export const register: Register = (on, options) => {
       $.clock.after(100, () => void $.prompt.fill({ text: draft, mode: 'replace' }))
       return { drop: `→ ${name}: sent` }
     }
-    // A prompt to Claude while a reply was open (its "→ name:" was deleted): the reply is over.
-    if (!address && (await $.state.get(COMPOSING)).value) {
+    // A prompt to Claude while a reply was open (its "→ name:" was deleted): the reply is over. So is a workflow's mode, above.
+    const replyOver = !address && !!(await $.state.get(COMPOSING)).value
+    if (replyOver || mode) {
       const draft = await takeDraft($)
-      await update($, composing, () => null)
+      if (replyOver) await update($, composing, () => null)
       // The draft set aside still comes back, once Claude Code has taken this prompt.
       if (draft !== null) $.clock.after(100, () => void $.prompt.fill({ text: draft, mode: 'replace' }))
     }
-    if (cfg.guard !== 'hold') return next(e)
-    const g = (await $.state.get(GUARD)).value ?? {}
-    if (g.fallback) {
-      return { drop: `REDhelm: this session switched models on its own (${g.fallback}). Run /model to choose, then send again.` }
-    }
-    if (g.stale && staleTold !== g.stale) {
-      staleTold = g.stale
-      return { drop: `REDhelm: this session runs ${short(g.model)}, but your default is now ${short(g.stale)}. Send again to keep ${short(g.model)}, or /model to switch.` }
-    }
-    return next(e)
+    const why = await held()
+    return why ? { drop: why } : next(e)
   }).catch(($, e, next) => next(e)) // fail open: an error in REDhelm never holds your work)
 
   on('agent.spawn', async ($, e, next) => {
@@ -1421,13 +1712,10 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     // The panel closing takes its sheet with it; reopened, it shows your agents.
     if (e.id === SHEET || e.id === PANE) await quietly(() => update($, inspecting, () => null))
-    // The bottom bar's Workflows pane closing takes its sheet with it.
-    if (e.id === WORKFLOW_PANE) await quietly(async () => {
-      sheetToken++
-      await update($, workflowSheet, () => null)
-    })
+    // The panel, or the bottom bar's Workflows pane, closing takes the workflow sheet with it, and an edit of its draft.
+    if (e.id === PANE || e.id === WORKFLOW_PANE) await quietly(() => closeWorkflow($))
     return r
-  })
+  }).catch(($, e, next) => next(e)) // fail open: an error in REDhelm never holds your work
 
   on('ui.render', { component: 'Pane', requestId: SHEET }, async ($, e) => (
     <Sheet els={elements($.ui.resolve(e), e.surface)} v={await view($, e.requestId)} act={actions($)} columns={e.props.bodyColumns} />
@@ -1440,7 +1728,7 @@ export const register: Register = (on, options) => {
     const act = actions($)
     return v.workflow
       ? <WorkflowSheet els={els} v={v} act={act} columns={e.props.bodyColumns} back={act.wfClose} />
-      : <WorkflowsSection els={els} act={act} />
+      : <WorkflowsSection els={els} v={v} act={act} columns={e.props.bodyColumns} />
   })
 
   /** Above the prompt: the whole rack in bottom placement, otherwise only a pulled-out strip. */

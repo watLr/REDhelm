@@ -494,6 +494,10 @@ export function applyOps(d: Draft, ops: readonly Op[]): Draft {
   }
 }
 
+/** How many items the chosen form lists: agents in Lineup, roles in Roles. A workflow of none is never saved. */
+export const itemCount = (d: Pick<SavedWorkflow, 'form' | 'roles' | 'stages'>) =>
+  d.form === 'roles' ? d.roles.length : d.stages.reduce((n, s) => n + s.agents.length, 0)
+
 // The saved file
 
 /** How long an id may be before Save makes it unique among the files. */

@@ -2,6 +2,7 @@ import type { Elements } from 'claude-code'
 
 import type { Agent, Detail, Draft, Guard, Message, Note, Release, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState, Workspace } from '../types'
 import { agentSpec, LEFT_BEHIND } from './agentfile'
+import { itemCount, projectKey } from './library'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
 import { bars, buckets, isMoving, rasterCells, spectrum, speed, svgTrace, tail, type Burst } from './trace'
 
@@ -48,12 +49,22 @@ export type Actions = {
   wfRemove: (item: number) => void
   /** Keeps the draft in the library. */
   wfKeep: () => void
-  /** Closes the sheet, and ends an edit or run of a workflow. */
+  /** Closes the sheet, and ends an edit of its draft. */
   wfClose: () => void
   /** The bottom bar's Workflows: opens the section in a pane of its own. */
   wfBar: () => void
-  /** Load lists the library; the section draws it once it is given. */
-  wfLoad?: () => void
+  /** Edit: the prompt box takes the change, `✎ Workflow: …`, keeping what you were writing to Claude. */
+  wfEdit: () => void
+  /** Steps the draft back one change. */
+  wfUndo: () => void
+  /** Load lists the library under the section; pressed again, puts it away. */
+  wfLoad: () => void
+  /** Opens a saved workflow's sheet. */
+  wfOpen: (id: string) => void
+  /** Run: `▶ <name>: ` in the prompt box, where your Enter hands the workflow to Claude. */
+  wfRun: (id: string) => void
+  /** Delete: the first press asks, the second removes it from the library. */
+  wfDelete: (id: string) => void
 }
 
 /** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colours moving and flat, the cells it holds. */
@@ -672,18 +683,56 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
   )
 }
 
-// Workflows: Save at the foot of the sidebar, and the sheet it opens
+// Workflows: Save and Load at the foot of the sidebar, and the sheets they open
 
-/** The foot of the sidebar, and the bottom bar's Workflows pane: Save, and Load once the library can be listed. */
-export function WorkflowsSection({ els, act }: { els: Els; act: Actions }) {
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+
+/** A saved workflow in the library list: how it is led, what it staffs, and the project it came from when that is another. */
+function libraryWords(w: SavedWorkflow, here: string) {
+  const skills = w.lead.skills.length
+  return [skills > 0 && (skills > 1 ? 'skills' : 'skill'), w.lead.playbook.length > 0 && 'playbook', plural(itemCount(w), w.form === 'roles' ? 'role' : 'agent'),
+    w.projectKey !== here && w.project && `from ${w.project}`].filter(Boolean).join(' · ')
+}
+
+/**
+ * The foot of the sidebar, and the bottom bar's Workflows pane: Save and Load, and under them the
+ * library as Load read it, this project's first: each name opens its sheet, Run goes straight to the prompt box.
+ */
+export function WorkflowsSection({ els, v, act, columns }: { els: Els; v: View; act: Actions; columns?: number }) {
   const { Box, Text, Button } = els
+  const lib = v.library
+  const here = projectKey(v.root)
+  // A name keeps the row less its indent, Run and the gap between.
+  const room = columns === undefined ? undefined : Math.max(4, columns - 7)
   return (
-    <Box justifyContent="space-between" columnGap={2}>
-      <Text color="subtle">Workflows</Text>
-      <Box flexShrink={0} columnGap={3}>
-        <Button key="wf-save" plain label="Save" hover={{ bold: true, scope: 'wf-save' }} onPress={act.wfSave} />
-        {act.wfLoad && <Button key="wf-load" plain label="Load" hover={{ bold: true, scope: 'wf-load' }} onPress={act.wfLoad} />}
+    <Box flexDirection="column">
+      <Box justifyContent="space-between" columnGap={2}>
+        <Text color="subtle">Workflows</Text>
+        <Box flexShrink={0} columnGap={3}>
+          <Button key="wf-save" plain label="Save" hover={{ bold: true, scope: 'wf-save' }} onPress={act.wfSave} />
+          <Button key="wf-load" plain label="Load" hover={{ bold: true, scope: 'wf-load' }} onPress={act.wfLoad} />
+        </Box>
       </Box>
+      {lib && (
+        <Box flexDirection="column" paddingLeft={2} marginTop={1} rowGap={1}>
+          {!lib.workflows.length && !lib.unreadable && <Text color="subtle">No saved workflows yet</Text>}
+          {lib.workflows.map(w => (
+            <Box key={`wf-lib-${w.id}`} flexDirection="column">
+              <Box justifyContent="space-between" columnGap={2}>
+                <Box flexShrink={1} minWidth={4}>
+                  <Button key={`wf-open-${w.id}`} plain label={room === undefined ? w.name : fit(w.name, room)} hover={{ underline: true, scope: `wf-open-${w.id}` }}
+                    onPress={() => act.wfOpen(w.id)} />
+                </Box>
+                <Box flexShrink={0}>
+                  <Button key={`wf-run-${w.id}`} plain label="Run" hover={{ bold: true, scope: `wf-run-${w.id}` }} onPress={() => act.wfRun(w.id)} />
+                </Box>
+              </Box>
+              <Text color="subtle" wrap="truncate-end">{libraryWords(w, here)}</Text>
+            </Box>
+          ))}
+          {lib.unreadable > 0 && <Text color="subtle">{`${lib.unreadable} ${lib.unreadable === 1 ? 'workflow' : 'workflows'} could not be read`}</Text>}
+        </Box>
+      )}
     </Box>
   )
 }
@@ -751,44 +800,28 @@ function WfItem({ els, act, k, label, setup, mark, ran, open, room, children }:
   )
 }
 
+/** A saved workflow as the sheet lists a draft: nothing folded, nothing left uncopied, no evidence, read. */
+const asDraft = (s: SavedWorkflow): Draft => ({ name: s.name, purpose: s.purpose, project: s.project, projectKey: s.projectKey, lead: s.lead, form: s.form,
+  roles: s.roles, stages: s.stages, types: s.types, folded: [], notCopied: [], evidence: [], read: 'done', back: 0, more: false })
+
 /**
- * The review sheet a Save opens: what REDhelm saw at once, and what it read of the session a few seconds
- * later, under `Reading…`. Each fact is marked `seen` or `read`; a practice opens on the moments it was
- * read from, an agent or role on its tools, skills, team and (Lineup) whole brief, with Remove. `back`:
- * drawn inside a panel, with Back to it.
+ * What the review sheet and a saved workflow's sheet both list: the lead, its playbook and the shared
+ * brief parts, then the roles or the lineup. A practice opens on the moments it was read from, an agent
+ * or role on its tools, skills, team and (Lineup) whole brief. `review`: the draft a Save is looking
+ * over, with `Save as`, the `seen` and `read` marks, the repeats folded away, and, when `remove`, Remove.
  */
-export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: View; act: Actions; columns: number; back?: () => void }) {
+function WorkflowParts({ els, v, act, d, detail, room, stacked, review }:
+  { els: Els; v: View; act: Actions; d: Draft; detail?: Detail; room: number; stacked: boolean; review?: { remove: boolean } }) {
   const { Box, Text, Button } = els
-  const w = v.workflow
   const t = tone(v)
-  const stacked = columns < 50
-  const compact = columns < 30
-  const backButton = back && <Button key="wf-back" plain label="← Back" hover={{ bold: true, scope: 'wf-back' }} onPress={back} />
-  const cancel = <Chip els={els} v={v} k="wf-cancel" text="Cancel" compact={compact} onPress={act.wfClose} />
-  // A sheet longer than the pane scrolls, and its scrollbar takes the last column.
-  const frame = (children: any) => <Box flexDirection="column" gap={1} width={columns} paddingRight={1}>{backButton}{children}</Box>
-  if (w?.mode !== 'review') return frame(null)
-  const d = w.draft
-  if (!d) {
-    return frame(
-      <Box flexDirection="column" gap={1}>
-        <Text bold>Save workflow</Text>
-        <Text color={w.error ? 'error' : 'subtle'} wrap="wrap">{w.error ?? 'No agent work in this session yet'}</Text>
-        <Box>{cancel}</Box>
-      </Box>,
-    )
-  }
-  const pending = d.read === 'pending'
-  // Beside the part's name (9 and a gap) and its mark (`read`, `seen`), or under it, indented; and the scrollbar's column.
-  const room = Math.max(8, columns - (stacked ? 2 : 17) - 1)
-  const isOpen = (kind: Detail['kind'], index: number) => w.detail?.kind === kind && w.detail.index === index
+  const isOpen = (kind: Detail['kind'], index: number) => detail?.kind === kind && detail.index === index
   const copied = new Map(d.types.map(x => [x.name, x.definition] as const))
   const markOf = (type: string) => (copied.has(type) ? 'type copied' : d.notCopied.includes(type) ? 'type not copied' : undefined)
   const line = (key: string, text: string, color?: string) => <Text key={key} color={color} wrap="wrap">{text}</Text>
   const skills = d.lead.skills
   const lead = [skills.length ? `${skills.join(', ')} ${skills.length > 1 ? 'skills' : 'skill'}` : 'no skill', short(d.lead.model), d.lead.effort].filter(Boolean).join(' · ')
 
-  /** What an agent and a role both open on: tools, skills, its own team, and a copied type's file whole. Remove while nothing is being read. */
+  /** What an agent and a role both open on: tools, skills, its own team, and a copied type's file whole. Remove while the draft can change and keeps an item. */
   const facts = (x: Draft['roles'][number] | Draft['stages'][number]['agents'][number], i: number) => {
     const tools = toolWords(x.tools)
     const flags = ['name' in x && x.name ? `name ${x.name}` : '', x.background ? 'background' : '', x.teammate ? 'teammate' : ''].filter(Boolean).join(' · ')
@@ -812,7 +845,7 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
         </Box>
       ),
       left.length > 0 && line(`wf-left-${i}`, `Stays behind: ${left.join(', ')}`, 'subtle'),
-      !pending && <Box key={`wf-rm-${i}`}><Chip els={els} v={v} k={`wf-remove-${i}`} text="Remove" compact onPress={() => act.wfRemove(i)} /></Box>,
+      review?.remove && <Box key={`wf-rm-${i}`}><Chip els={els} v={v} k={`wf-remove-${i}`} text="Remove" compact onPress={() => act.wfRemove(i)} /></Box>,
     ]
   }
 
@@ -853,6 +886,123 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
   const parts = d.lead.briefParts
   const partsOpen = isOpen('parts', 0)
 
+  return (
+    <Box flexDirection="column" gap={stacked ? 1 : 0}>
+      <Part els={els} name="Lead" stacked={stacked}><Text wrap="wrap">{lead}</Text></Part>
+      {d.lead.playbook.length > 0 && (
+        <Part els={els} name="Playbook" mark={review && 'read'} stacked={stacked}>
+          {d.lead.playbook.map((p, i) => {
+            const text = practiceWords(p)
+            const open = isOpen('practice', i)
+            return (
+              <Box key={`wf-pr-${i}`} flexDirection="column">
+                <Box>
+                  <Box width={3} flexShrink={0}><Text color="subtle">{String(i + 1)}</Text></Box>
+                  <Box flexShrink={1} minWidth={4}>
+                    <Button key={`wf-practice-${i}`} plain label={fit(text, Math.max(4, room - 3))} hover={{ underline: true, scope: `wf-practice-${i}` }}
+                      onPress={() => act.wfDetail(open ? null : { kind: 'practice', index: i })} />
+                  </Box>
+                </Box>
+                {open && (
+                  <Box flexDirection="column" paddingLeft={3}>
+                    {text.length > room - 3 && line(`wf-pt-${i}`, text)}
+                    {(d.evidence[i] ?? []).map((e, j) => line(`wf-ev-${i}-${j}`, e, 'subtle'))}
+                  </Box>
+                )}
+              </Box>
+            )
+          })}
+        </Part>
+      )}
+      {parts.length > 0 && (
+        <Part els={els} name="Briefs" mark={review && 'seen'} stacked={stacked}>
+          <Box>
+            <Button key="wf-parts" plain label={fit(parts[0]!.split('\n')[0]!.trim(), room)} hover={{ underline: true, scope: 'wf-parts' }}
+              onPress={() => act.wfDetail(partsOpen ? null : { kind: 'parts', index: 0 })} />
+          </Box>
+          {partsOpen && <Box flexDirection="column" gap={1} marginTop={1}>{parts.map((p, i) => line(`wf-part-${i}`, p))}</Box>}
+        </Part>
+      )}
+      {review && (
+        <Part els={els} name="Save as" stacked={stacked}>
+          <Box>{choice('roles', 'Roles')}<Text color="subtle">·</Text>{choice('lineup', 'Lineup')}</Box>
+        </Part>
+      )}
+      <Part els={els} name={d.form === 'roles' ? 'Roles' : 'Lineup'} stacked={stacked}>
+        <Box flexDirection="column" gap={1}>{d.form === 'roles' ? roles : lineup}</Box>
+        {d.form === 'lineup' && d.folded.map((f, i) => line(`wf-fold-${i}`, `${f.label} ran ${f.times} times · saved once`, 'subtle'))}
+      </Part>
+    </Box>
+  )
+}
+
+/**
+ * The workflow sheet, drawn in the panel (or the bottom bar's pane) in place of what was there. `back`:
+ * drawn inside a panel, with Back to it.
+ * - The review sheet a Save opens: what REDhelm saw at once, and what it read of the session a few
+ *   seconds later, under `Reading…`; each fact marked `seen` or `read`. Edit takes the change in the
+ *   prompt box (`Applying…` while it applies) and Undo steps back one change. Nothing changes while
+ *   the reading is out: it names the items as they were when it was asked. Save waits out an edit
+ *   applying, and a form with no items has none.
+ * - A saved workflow, opened from the library: the same parts, with Run, Delete and Close, and one line
+ *   when this session runs on another model than the lead did.
+ */
+export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: View; act: Actions; columns: number; back?: () => void }) {
+  const { Box, Text, Button } = els
+  const w = v.workflow
+  const stacked = columns < 50
+  const compact = columns < 30
+  // Beside the part's name (9 and a gap) and its mark (`read`, `seen`), or under it, indented; and the scrollbar's column.
+  const room = Math.max(8, columns - (stacked ? 2 : 17) - 1)
+  const backButton = back && <Button key="wf-back" plain label="← Back" hover={{ bold: true, scope: 'wf-back' }} onPress={back} />
+  const chip = (k: string, text: string, onPress: () => void, primary?: boolean) => <Chip els={els} v={v} k={k} text={text} primary={primary} compact={compact} onPress={onPress} />
+  const cancel = chip('wf-cancel', 'Cancel', act.wfClose)
+  // A sheet longer than the pane scrolls, and its scrollbar takes the last column.
+  const frame = (children: any) => <Box flexDirection="column" gap={1} width={columns} paddingRight={1}>{backButton}{children}</Box>
+
+  if (w?.mode === 'saved') {
+    const s = v.library?.workflows.find(x => x.id === w.id)
+    if (!s) return frame(null)
+    const ran = short(s.lead.model)
+    const runs = short(v.guard.model)
+    const from = s.projectKey !== projectKey(v.root) && s.project ? `from ${s.project}` : ''
+    return frame(
+      <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column">
+          <Text bold wrap="wrap">{s.name}</Text>
+          {(s.purpose || from) && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {s.purpose && <Text color="subtle" wrap="wrap">{s.purpose}</Text>}
+              {from && <Text color="subtle">{from}</Text>}
+            </Box>
+          )}
+          {ran && runs && ran !== runs && <Text color="subtle" wrap="wrap">{`The lead ran on ${ran} · this session runs ${runs}`}</Text>}
+        </Box>
+        <WorkflowParts els={els} v={v} act={act} d={asDraft(s)} detail={w.detail} room={room} stacked={stacked} />
+        <Box columnGap={1} rowGap={1} flexWrap="wrap">
+          {chip(`wf-run-${s.id}`, 'Run', () => act.wfRun(s.id), true)}
+          {chip('wf-delete', 'Delete', () => act.wfDelete(s.id))}
+          {chip('wf-close', 'Close', act.wfClose)}
+        </Box>
+        {w.armed && <Text color="warning">Press again to delete</Text>}
+      </Box>,
+    )
+  }
+
+  if (w?.mode !== 'review') return frame(null)
+  const d = w.draft
+  if (!d) {
+    return frame(
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Save workflow</Text>
+        <Text color={w.error ? 'error' : 'subtle'} wrap="wrap">{w.error ?? 'No agent work in this session yet'}</Text>
+        <Box>{cancel}</Box>
+      </Box>,
+    )
+  }
+  const pending = d.read === 'pending'
+  const busy = !!w.busy
+  const items = itemCount(d)
   return frame(
     <Box flexDirection="column" gap={1}>
       <Box flexDirection="column">
@@ -867,57 +1017,16 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
           {!pending && d.purpose && <Text color="subtle" wrap="wrap">{d.purpose}</Text>}
         </Box>
         {d.read === 'failed' && <Text color="warning" wrap="wrap">Couldn't read this session's lead</Text>}
+        {busy && <Text color="subtle">Applying…</Text>}
         {w.error && <Text color="error" wrap="wrap">{w.error}</Text>}
       </Box>
-
-      <Box flexDirection="column" gap={stacked ? 1 : 0}>
-        <Part els={els} name="Lead" stacked={stacked}><Text wrap="wrap">{lead}</Text></Part>
-        {d.lead.playbook.length > 0 && (
-          <Part els={els} name="Playbook" mark="read" stacked={stacked}>
-            {d.lead.playbook.map((p, i) => {
-              const text = practiceWords(p)
-              const open = isOpen('practice', i)
-              return (
-                <Box key={`wf-pr-${i}`} flexDirection="column">
-                  <Box>
-                    <Box width={3} flexShrink={0}><Text color="subtle">{String(i + 1)}</Text></Box>
-                    <Box flexShrink={1} minWidth={4}>
-                      <Button key={`wf-practice-${i}`} plain label={fit(text, Math.max(4, room - 3))} hover={{ underline: true, scope: `wf-practice-${i}` }}
-                        onPress={() => act.wfDetail(open ? null : { kind: 'practice', index: i })} />
-                    </Box>
-                  </Box>
-                  {open && (
-                    <Box flexDirection="column" paddingLeft={3}>
-                      {text.length > room - 3 && line(`wf-pt-${i}`, text)}
-                      {(d.evidence[i] ?? []).map((e, j) => line(`wf-ev-${i}-${j}`, e, 'subtle'))}
-                    </Box>
-                  )}
-                </Box>
-              )
-            })}
-          </Part>
-        )}
-        {parts.length > 0 && (
-          <Part els={els} name="Briefs" mark="seen" stacked={stacked}>
-            <Box>
-              <Button key="wf-parts" plain label={fit(parts[0]!.split('\n')[0]!.trim(), room)} hover={{ underline: true, scope: 'wf-parts' }}
-                onPress={() => act.wfDetail(partsOpen ? null : { kind: 'parts', index: 0 })} />
-            </Box>
-            {partsOpen && <Box flexDirection="column" gap={1} marginTop={1}>{parts.map((p, i) => line(`wf-part-${i}`, p))}</Box>}
-          </Part>
-        )}
-        <Part els={els} name="Save as" stacked={stacked}>
-          <Box>{choice('roles', 'Roles')}<Text color="subtle">·</Text>{choice('lineup', 'Lineup')}</Box>
-        </Part>
-        <Part els={els} name={d.form === 'roles' ? 'Roles' : 'Lineup'} stacked={stacked}>
-          <Box flexDirection="column" gap={1}>{d.form === 'roles' ? roles : lineup}</Box>
-          {d.form === 'lineup' && d.folded.map((f, i) => line(`wf-fold-${i}`, `${f.label} ran ${f.times} times · saved once`, 'subtle'))}
-        </Part>
-      </Box>
-
+      {/* The last item stays: a workflow of none is never saved. */}
+      <WorkflowParts els={els} v={v} act={act} d={d} detail={w.detail} room={room} stacked={stacked} review={{ remove: !pending && !busy && items > 1 }} />
       <Box columnGap={1} rowGap={1} flexWrap="wrap">
-        <Chip els={els} v={v} k="wf-keep" text="Save" primary compact={compact} onPress={act.wfKeep} />
-        {d.more && <Chip els={els} v={v} k="wf-earlier" text="Earlier" compact={compact} onPress={act.wfEarlier} />}
+        {items > 0 && !busy && chip('wf-keep', 'Save', act.wfKeep, true)}
+        {!pending && chip('wf-edit', 'Edit', act.wfEdit)}
+        {!pending && !busy && w.undo.length > 0 && chip('wf-undo', 'Undo', act.wfUndo)}
+        {d.more && chip('wf-earlier', 'Earlier', act.wfEarlier)}
         {cancel}
       </Box>
     </Box>,
@@ -978,7 +1087,7 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       <Finished els={els} v={v} act={act} strips={done} columns={columns} cells={cells} />
       {overlaps(v.agents).length > 0 && plate(<Overlaps els={els} v={v} />)}
       <Boards els={els} v={v} />
-      {plate(<WorkflowsSection els={els} act={act} />)}
+      {plate(<WorkflowsSection els={els} v={v} act={act} columns={columns} />)}
       {v.release && plate(<Update els={els} v={v} act={act} />)}
     </Box>
   )

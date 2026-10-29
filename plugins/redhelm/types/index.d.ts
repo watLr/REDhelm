@@ -167,7 +167,7 @@ export type SavedType = {
 export type Draft = Omit<SavedWorkflow, 'version' | 'id' | 'savedAt'> & {
   /** Lineup repeats folded away: "<label> ran <times> times · saved once". */
   folded: { label: string; times: number }[]
-  /** Project types whose file was found but could not be read: "type not copied". */
+  /** A project type whose file was not found or could not be read: "type not copied". */
   notCopied: string[]
   /** Per practice, the trace lines it cites. For the sheet; never saved. */
   evidence: string[][]
