@@ -1,19 +1,25 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, HookStream, Register, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { EngineInterface, HookStream, Register, SessionMessage, TurnStepChunk, TurnStepResult } from 'claude-code'
 
-import type { Agent, Guard, Note, Placement, Release, SetupItem } from '../types'
+import type { Agent, Draft, Guard, Note, Placement, Release, SavedType, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState } from '../types'
 import { DEFAULTS, LINES, activity, appearance, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
 import { BUCKET_MS, BUCKETS, burst, isMoving, record, spectrum, traceRaster, type Burst } from './trace'
-import { Alert, Backdropped, Panel, Sheet, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
+import { Alert, Backdropped, Panel, Sheet, WorkflowSheet, WorkflowsSection, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
+import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, widen,
+  type Call, type Msg, type Reading, type Stretch, type TraceEvent } from './workflows'
+import { applyOps, listed, slug, toSaved, uniqueName } from './library'
+import { typeName } from './agentfile'
 
 type $ = EngineInterface
 
 const PANE = 'redhelm'
 /** The agent sheet: a second pane, opened as a dialog over one agent. */
 const SHEET = 'redhelm-agent'
+/** The bottom bar's Workflows: Save and Load, and the sheet a Save opens, in a pane of their own. */
+const WORKFLOW_PANE = 'redhelm-workflow'
 const TITLE = 'REDhelm'
 
 const AGENTS = { plugin: 'redhelm', key: 'agents' } as const
@@ -42,6 +48,9 @@ const collapsed = atom({ plugin: 'redhelm', key: 'collapsed' } as const, false)
 const setup = atom(SETUP, [] as SetupItem[])
 const usage = atom(USAGE, {})
 const release = atom({ plugin: 'redhelm', key: 'release' } as const, null as Release | null)
+const workflowSheet = atom({ plugin: 'redhelm', key: 'workflowSheet' } as const, null as SheetState | null)
+const workflowList = atom({ plugin: 'redhelm', key: 'workflowList' } as const, null as { workflows: SavedWorkflow[]; unreadable: number } | null)
+const workflowMode = atom({ plugin: 'redhelm', key: 'workflowMode' } as const, null as WorkflowMode)
 
 const ENDED = new Set(['completed', 'failed', 'killed'])
 const LIVE = new Set(['pending', 'running', 'waiting'])
@@ -591,14 +600,19 @@ async function onScreen($: $) {
 /** One label from the small model, the way /btw asks a side question: low effort, a few words, six seconds at most. */
 const askHaiku = ($: $): Complete => async ({ system, prompt }) => {
   const r = await $.model.complete({ model: 'haiku', effort: 'low', maxTokens: 30, timeoutMs: 6000, system, prompt }, { signal: stopLabels.signal })
-  spent.calls++
-  spent.input += r.usage?.input_tokens ?? 0
-  spent.output += r.usage?.output_tokens ?? 0
+  counted(r)
   return r.isAnswered ? r.text : undefined
 }
 
-/** What labels have cost this session, for /redhelm models. */
+/** What REDhelm's own model calls (labels, and a workflow's reading) have cost this session, for /redhelm models. */
 const spent = { calls: 0, input: 0, output: 0 }
+
+/** One more call in the tally. */
+const counted = (r: { usage?: { input_tokens?: number; output_tokens?: number } }) => {
+  spent.calls++
+  spent.input += r.usage?.input_tokens ?? 0
+  spent.output += r.usage?.output_tokens ?? 0
+}
 
 /** Titles for questions first (they are what you read), then headlines for agents at work; written only when they change. */
 async function labelAll($: $) {
@@ -731,6 +745,191 @@ async function drawBackdrop($: $, at: number, columns: number, rows: number) {
   return backdrop(cfg.backdrop, columns, rows, still ? 0 : at / 1000, PALETTES[theme], Math.min(1, calls / 40), still ? [] : rings)
 }
 
+// Workflows: Save reads the session into a sheet, the reading names it, Save on the sheet keeps it
+
+/** Where a project keeps its own agent types, and how far into it Save looks. */
+const AGENT_DIR = '.claude/agents'
+const AGENT_DEPTH = 4
+const AGENT_FILES = 200
+
+/** Each Save and Earlier takes a new token, and closing the sheet moves it on: a reading lands only on the sheet it was asked for. */
+let sheetToken = 0
+/** A keep under way: a second press while it writes writes nothing. */
+let keeping = false
+
+/** The session's rows as Save reads them: text, tool uses and their outcomes, tool results; every brief as given, never tidied. */
+const asMsgs = (rows: readonly SessionMessage[]): Msg[] =>
+  rows.map(m => compact({
+    role: m.role,
+    text: m.text ?? '',
+    toolUses: (m.toolUses ?? []).map(u => compact({ tool: u.tool, input: u.input ?? {}, isError: u.isError, agentId: u.agentId, result: u.result })),
+    toolResults: m.toolResults,
+  }))
+
+/** The scripts of the built-in workflow runs the lead started in the stretch: evidence of how it led, for the reading, never saved. */
+function scriptsIn(msgs: readonly Msg[], s: Stretch) {
+  const scripts = msgs.slice(s.from, s.to).flatMap(m => (m.role === 'assistant' ? m.toolUses : []))
+    .flatMap(u => (u.tool === 'Workflow' && !u.isError && typeof u.input.script === 'string' ? [u.input.script] : []))
+  return scripts.join('\n\n') || undefined
+}
+
+/** The project's agent files by the type name each gives, subfolders too (as Claude Code finds them); the first file to give a name has it. A file that cannot be read is passed over. */
+async function projectTypes($: $, dir: string) {
+  const found = new Map<string, string>()
+  const folders: [path: string, depth: number][] = [[dir, 0]]
+  let files = 0
+  while (folders.length && files < AGENT_FILES) {
+    const [at, depth] = folders.shift()!
+    const entries = (await $.fs.list(at).catch(() => [])).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    for (const f of entries) {
+      const path = `${at}/${f.name}`
+      if (f.kind === 'dir' && depth < AGENT_DEPTH) folders.push([path, depth + 1])
+      if (f.kind !== 'file' || !f.name.endsWith('.md') || files++ >= AGENT_FILES) continue
+      const text = await $.fs.read(path).catch(() => undefined)
+      const name = typeof text === 'string' ? typeName(text) : undefined
+      if (name && !found.has(name)) found.set(name, text as string)
+    }
+  }
+  return found
+}
+
+/**
+ * The project's own types the agents ran as, copied whole, and those whose file Save could not find or
+ * read ("type not copied"). Where REDhelm saw a type come from at spawn decides: a project's is looked
+ * for in `.claude/agents/`; a person's, a plugin's or a built-in travels by its name only. An agent
+ * REDhelm holds no record of (it ran before REDhelm, or its record was let go) is looked for too, and
+ * copied only when its file is there.
+ */
+async function copyTypes($: $, calls: readonly Call[], records: Record<string, Agent>, at: string): Promise<{ types: SavedType[]; notCopied: string[] }> {
+  const origins = new Map<string, string | undefined>()
+  for (const c of calls) {
+    const type = c.input.subagent_type || 'general-purpose'
+    const origin = Object.hasOwn(records, c.agentId) ? records[c.agentId]!.origin : undefined
+    const was = origins.get(type)
+    origins.set(type, was === 'project' ? was : origin ?? was)
+  }
+  // A plugin's type is named `<plugin>:<name>`, which no project file gives.
+  const wanted = [...origins].filter(([type, o]) => o === 'project' || (o === undefined && !type.includes(':'))).map(([type]) => type)
+  const files = wanted.length ? await projectTypes($, `${at}/${AGENT_DIR}`) : new Map<string, string>()
+  return {
+    types: wanted.flatMap(name => (files.has(name) ? [{ name, definition: files.get(name)! }] : [])),
+    notCopied: wanted.filter(name => origins.get(name) === 'project' && !files.has(name)),
+  }
+}
+
+/** What a Save or Earlier read: the draft of the stretch `back` widens to (none without agent work), and what its reading is given. */
+type SaveRead = { draft?: Draft; trace: TraceEvent[]; script?: string }
+
+/**
+ * The session as Save reads it: the main conversation; REDhelm's records; the own conversation of each
+ * top-level agent that started agents (its team), one it cannot read counting as none; the lead's model
+ * and effort from the guard; and the project's types the agents ran as.
+ */
+async function readForSave($: $, back: number): Promise<SaveRead> {
+  const msgs = asMsgs(await $.session.messages())
+  const records = await read($, agents)
+  const list = stretches(msgs)
+  const s = widen(list, back)
+  const calls = [...agentCalls(msgs, s), ...runCalls(msgs, s, records)]
+  const teams: Record<string, Msg[]> = {}
+  for (const c of calls) {
+    const r = Object.hasOwn(records, c.agentId) ? records[c.agentId] : undefined
+    if (!r || r.parent || !r.tools?.Agent) continue
+    const own = await $.session.messages({ agentId: c.agentId }).catch(() => undefined)
+    if (Array.isArray(own)) teams[c.agentId] = asMsgs(own)
+  }
+  const g = await read($, guard)
+  const at = root || (await $.session.root())
+  const draft = readWorkflow({ msgs, records, teams, list, back, root: at, lead: { model: g.model, effort: g.effort } })
+  if (!draft) return { trace: [] }
+  const theirs = Object.values(teams).flatMap(own => agentCalls(own, { from: 0, to: own.length, led: false }))
+  return { draft: { ...draft, ...(await copyTypes($, [...calls, ...theirs], records, at)) }, trace: leadTrace(msgs, s), script: scriptsIn(msgs, s) }
+}
+
+/** Save (`back` 0) and Earlier: the sheet at once with what was seen, then the reading, which never holds it up. */
+async function startSave($: $, back: number) {
+  const token = ++sheetToken
+  let got: SaveRead
+  try {
+    got = await readForSave($, back)
+  } catch {
+    if (token === sheetToken) await update($, workflowSheet, () => ({ mode: 'review' as const, error: "Couldn't read this session", undo: [], token }))
+    return
+  }
+  // A newer Save or Earlier, or the sheet closed, while the session was read.
+  if (token !== sheetToken) return
+  const { draft, trace, script } = got
+  await update($, workflowSheet, () => ({ mode: 'review' as const, draft, undo: [], token }))
+  if (draft) void quietly(() => readLead($, token, draft, trace, script))
+}
+
+/**
+ * The reading: one call per Save or Earlier, Sonnet at low effort, whatever the labels setting (that is
+ * for the dashboard's labels), counted with them. It lands only while the sheet still holds the draft it
+ * was asked of, unread; a call that fails or times out leaves the fallbacks and says so.
+ */
+async function readLead($: $, token: number, asked: Draft, trace: readonly TraceEvent[], script?: string) {
+  let reading: Reading | undefined
+  try {
+    const r = await $.model.complete({ ...READING_CALL, ...readingRequest(asked, trace, script) }, { signal: stopLabels.signal })
+    counted(r)
+    reading = r.isAnswered ? checkReading(r.text, trace, asked) : undefined
+  } catch {}
+  await update($, workflowSheet, s =>
+    s?.mode === 'review' && s.token === token && s.draft?.read === 'pending' ? { ...s, draft: applyReading(s.draft, reading, trace) } : s)
+}
+
+/**
+ * The draft written to the library: under a name no saved workflow has ("<name> 2"), as a file no file
+ * in the folder has, so nothing is overwritten. A library folder not made yet holds nothing; one that
+ * is there but cannot be listed is an error, never taken for empty.
+ */
+async function writeWorkflow($: $, d: Draft) {
+  const h = await home($)
+  if (!h) throw new Error('no home folder to keep it in')
+  const dir = `${h}/.claude/redhelm/workflows`
+  const entries = await $.fs.list(dir).catch(async (err: unknown) => {
+    if (await $.fs.exists(dir).catch(() => true)) throw err
+    return []
+  })
+  const names = entries.filter(f => f.kind === 'file' && f.name.endsWith('.json')).map(f => f.name)
+  const files = await Promise.all(names.map(async n => ({ name: n, text: await $.fs.read(`${dir}/${n}`).then(t => (typeof t === 'string' ? t : ''), () => '') })))
+  const name = uniqueName(d.name.trim() || 'Workflow', listed(files, d.projectKey).workflows.map(w => w.name))
+  const ids = new Set(names.map(n => n.slice(0, -'.json'.length).toLowerCase()))
+  const base = slug(name)
+  let id = base
+  for (let k = 2; ids.has(id); k++) id = `${base}-${k}`
+  await $.fs.write(`${dir}/${id}.json`, `${JSON.stringify(toSaved({ ...d, name }, await $.clock.now(), id), null, 2)}\n`)
+  return name
+}
+
+/** Save on the sheet. Pressed while the reading is out, it keeps what was seen. A write that fails says why and leaves the sheet open. */
+async function keepWorkflow($: $) {
+  const s = await read($, workflowSheet)
+  if (keeping || s?.mode !== 'review' || !s.draft) return
+  keeping = true
+  let name: string
+  try {
+    name = await writeWorkflow($, s.draft.read === 'pending' ? applyReading(s.draft, undefined, []) : s.draft)
+  } catch (err) {
+    // Paths in the reason lose the home folder, as everything REDhelm shows does.
+    $.ui.toast(`Couldn't save · ${excerpt(tidy(err instanceof Error ? err.message : String(err)), 80) || 'unknown reason'}`)
+    return
+  } finally {
+    keeping = false
+  }
+  sheetToken++
+  await update($, workflowSheet, cur => (cur?.mode === 'review' && cur.token === s.token ? null : cur))
+  $.ui.toast(`Saved · ${name}`)
+}
+
+/** Cancel, Back, Esc: the sheet goes, a reading still out is dropped, and an edit or run of a workflow ends. */
+async function closeWorkflow($: $) {
+  sheetToken++
+  await update($, workflowSheet, () => null)
+  await update($, workflowMode, () => null)
+}
+
 // Drawing
 
 /**
@@ -795,6 +994,23 @@ function actions($: $, inPane = false): Actions {
     applySetup: () => void quietly(() => applySetup($)),
     skipSetup: () => void quietly(() => skipSetup($)),
     update: () => void quietly(async () => $.ui.toast(await updateNow($))),
+    wfSave: () => void quietly(() => startSave($, 0)),
+    wfEarlier: () => void quietly(async () => {
+      const s = await read($, workflowSheet)
+      if (s?.mode === 'review' && s.draft?.more) await startSave($, s.draft.back + 1)
+    }),
+    wfForm: form => void quietly(() => update($, workflowSheet, s => (s?.mode === 'review' && s.draft ? { ...s, draft: { ...s.draft, form }, detail: undefined } : s))),
+    wfDetail: d => void quietly(() => update($, workflowSheet, s => (s ? { ...s, detail: d ?? undefined } : s))),
+    wfRemove: item => void quietly(() => update($, workflowSheet, s => {
+      // Nothing is removed while the reading is out: it names the agents and roles as they were when it was asked.
+      if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending' || s.busy) return s
+      const next = applyOps(s.draft, [{ op: 'remove', item }])
+      return next === s.draft ? s : { ...s, draft: next, undo: [...s.undo, s.draft], detail: undefined }
+    })),
+    wfKeep: () => void quietly(() => keepWorkflow($)),
+    wfClose: () => void quietly(() => closeWorkflow($)),
+    // Opened inside the press, as the agent sheet is: a pane the person asked for is placed at any width.
+    wfBar: () => void $.ui.open({ id: WORKFLOW_PANE, title: 'Workflows', focus: true, closeOnEscape: true, rows: 24 }).catch(() => {}),
   }
 }
 
@@ -842,6 +1058,9 @@ async function view($: $, site?: string): Promise<View> {
     at: await $.clock.now(),
     motion: cfg.motion === 'on',
     mount: site ? (key, spec) => void mounted.set(key, spec) : undefined,
+    workflow: await read($, workflowSheet),
+    library: await read($, workflowList),
+    mode: await read($, workflowMode),
   }
 }
 
@@ -1174,7 +1393,11 @@ export const register: Register = (on, options) => {
     // The backdrop: the docked sidebar on the terminal, where a Raster can fill the pane.
     const fielded = e.surface === 'terminal' && e.props.placement === 'dock' && cfg.backdrop !== 'none'
     if (fielded) v.field = hex(PALETTES[theme].bg)
-    // An agent's sheet takes the panel's place until Back: on the backdrop's colour, without its pattern.
+    // A workflow's sheet, and an agent's, take the panel's place until Back: on the backdrop's colour, without its pattern.
+    if (v.workflow) {
+      backdropSite = undefined
+      return <Backdropped els={els} v={v} columns={columns} rows={rows}><WorkflowSheet els={els} v={v} act={act} columns={columns} back={act.wfClose} /></Backdropped>
+    }
     if (v.inspecting) {
       backdropSite = undefined
       return <Backdropped els={els} v={v} columns={columns} rows={rows}><Sheet els={els} v={v} act={act} columns={columns} back={() => act.inspect(null)} /></Backdropped>
@@ -1198,12 +1421,27 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     // The panel closing takes its sheet with it; reopened, it shows your agents.
     if (e.id === SHEET || e.id === PANE) await quietly(() => update($, inspecting, () => null))
+    // The bottom bar's Workflows pane closing takes its sheet with it.
+    if (e.id === WORKFLOW_PANE) await quietly(async () => {
+      sheetToken++
+      await update($, workflowSheet, () => null)
+    })
     return r
   })
 
   on('ui.render', { component: 'Pane', requestId: SHEET }, async ($, e) => (
     <Sheet els={elements($.ui.resolve(e), e.surface)} v={await view($, e.requestId)} act={actions($)} columns={e.props.bodyColumns} />
   ))
+
+  /** The bottom bar's Workflows: Save and Load, and the sheet a Save opens, with Back to them. */
+  on('ui.render', { component: 'Pane', requestId: WORKFLOW_PANE }, async ($, e) => {
+    const els = elements($.ui.resolve(e), e.surface)
+    const v = await view($, e.requestId)
+    const act = actions($)
+    return v.workflow
+      ? <WorkflowSheet els={els} v={v} act={act} columns={e.props.bodyColumns} back={act.wfClose} />
+      : <WorkflowsSection els={els} act={act} />
+  })
 
   /** Above the prompt: the whole rack in bottom placement, otherwise only a pulled-out strip. */
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

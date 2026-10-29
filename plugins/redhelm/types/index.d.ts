@@ -177,6 +177,22 @@ export type Draft = Omit<SavedWorkflow, 'version' | 'id' | 'savedAt'> & {
   more: boolean
 }
 
+/** What the sheet has opened under a line: an agent or role (`item`, as the form lists them), a practice, or the shared brief parts. */
+export type Detail = { kind: 'item' | 'practice' | 'parts'; index: number }
+
+/**
+ * The workflow sheet. `review`: a Save being looked over; no `draft` when the session held no agent
+ * work or could not be read (`error`). `token` is new with each Save and Earlier: a reading that lands
+ * under another is dropped. `saved`: a workflow from the library.
+ */
+export type WorkflowSheet =
+  | { mode: 'review'; draft?: Draft; error?: string; undo: Draft[]; busy?: 'applying'; detail?: Detail; token: number }
+  | { mode: 'saved'; id: string; armed?: boolean; detail?: Detail }
+
+/** Who owns the prompt box besides Reply: an edit of the open draft, or a run of a saved workflow. */
+export type WorkflowMode = null | { kind: 'edit' }
+  | { kind: 'run'; id: string; name: string; registered: Record<string, string>; leftBehind: Record<string, string[]> }
+
 declare module 'claude-code' {
   interface PluginState {
     redhelm: {
@@ -202,6 +218,11 @@ declare module 'claude-code' {
       inspecting: string | null
       /** Whether the sheet shows the agent's whole brief. */
       briefOpen: boolean
+      /** The workflow sheet, drawn in the panel (or its own pane at the bottom) while open. */
+      workflowSheet: WorkflowSheet | null
+      /** The library as Load last read it; null while it is not shown. */
+      workflowList: { workflows: SavedWorkflow[]; unreadable: number } | null
+      workflowMode: WorkflowMode
     }
   }
 }

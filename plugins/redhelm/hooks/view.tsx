@@ -1,6 +1,7 @@
 import type { Elements } from 'claude-code'
 
-import type { Agent, Guard, Message, Note, Release, SetupItem, Workspace } from '../types'
+import type { Agent, Detail, Draft, Guard, Message, Note, Release, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState, Workspace } from '../types'
+import { agentSpec, LEFT_BEHIND } from './agentfile'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
 import { bars, buckets, isMoving, rasterCells, spectrum, speed, svgTrace, tail, type Burst } from './trace'
 
@@ -35,6 +36,24 @@ export type Actions = {
   skipSetup: () => void
   /** Installs the newer REDhelm through Claude Code's plugin update. */
   update: () => void
+  /** Save: reads the session's latest stretch of agent work into the workflow sheet. */
+  wfSave: () => void
+  /** Widens the sheet's stretch by the one before it. */
+  wfEarlier: () => void
+  /** Save as: Roles or Lineup. */
+  wfForm: (form: 'roles' | 'lineup') => void
+  /** Opens a line of the sheet under it, or closes it (null). */
+  wfDetail: (d: Detail | null) => void
+  /** Drops an agent (Lineup) or role (Roles) from the draft. */
+  wfRemove: (item: number) => void
+  /** Keeps the draft in the library. */
+  wfKeep: () => void
+  /** Closes the sheet, and ends an edit or run of a workflow. */
+  wfClose: () => void
+  /** The bottom bar's Workflows: opens the section in a pane of its own. */
+  wfBar: () => void
+  /** Load lists the library; the section draws it once it is given. */
+  wfLoad?: () => void
 }
 
 /** A trace drawn as a Raster, for the frame loop to repaint: whose, how big, its colours moving and flat, the cells it holds. */
@@ -75,6 +94,12 @@ export type View = {
    * it, so text never lands on the pattern. Absent, the pane's own colour shows.
    */
   field?: string
+  /** The workflow sheet, while one is open. */
+  workflow: SheetState | null
+  /** The library as Load read it, while it is listed. */
+  library: { workflows: SavedWorkflow[]; unreadable: number } | null
+  /** An edit or run of a workflow holding the prompt box. */
+  mode: WorkflowMode
 }
 
 // Tokens: surfaces follow the theme; meaning colours are the theme's own keys
@@ -456,12 +481,12 @@ function SetupCard({ els, v, act }: { els: Els; v: View; act: Actions }) {
   )
 }
 
-// Workflows: only this session's, and only what is still open
+// Boards: only this session's, and only what is still open
 
 const FINISHED_RUN = /^(complete|completed|cancelled|canceled|cleared)\b/i
 
 /**
- * The workflows worth showing: this session's project (the folder or one above it) or one an
+ * The boards worth showing: this session's project (the folder or one above it) or one an
  * agent here is changing files in; finished runs and boards with nothing open stay quiet.
  */
 export function relevant(v: View): Workspace[] {
@@ -493,7 +518,7 @@ function Progress({ els, done, total }: { els: Els; done: number; total: number 
   return <Text><Text color="success">{'━'.repeat(n)}</Text><Text color="subtle">{'━'.repeat(width - n)}</Text>  <Text color="subtle">{done} of {total}</Text></Text>
 }
 
-function Workflows({ els, v }: { els: Els; v: View }) {
+function Boards({ els, v }: { els: Els; v: View }) {
   const { Box, Text } = els
   const list = relevant(v)
   if (!list.length) return null
@@ -647,6 +672,258 @@ export function Sheet({ els, v, act, columns, back }: { els: Els; v: View; act: 
   )
 }
 
+// Workflows: Save at the foot of the sidebar, and the sheet it opens
+
+/** The foot of the sidebar, and the bottom bar's Workflows pane: Save, and Load once the library can be listed. */
+export function WorkflowsSection({ els, act }: { els: Els; act: Actions }) {
+  const { Box, Text, Button } = els
+  return (
+    <Box justifyContent="space-between" columnGap={2}>
+      <Text color="subtle">Workflows</Text>
+      <Box flexShrink={0} columnGap={3}>
+        <Button key="wf-save" plain label="Save" hover={{ bold: true, scope: 'wf-save' }} onPress={act.wfSave} />
+        {act.wfLoad && <Button key="wf-load" plain label="Load" hover={{ bold: true, scope: 'wf-load' }} onPress={act.wfLoad} />}
+      </Box>
+    </Box>
+  )
+}
+
+/** "general-purpose · sonnet · high · worktree": what an agent or role ran as. */
+const setupWords = (x: { type: string; model?: string; effort?: string; isolation?: string }) =>
+  [x.type, x.model, x.effort, x.isolation].filter(Boolean).join(' · ')
+
+/** Tools by use, most used first: "Read 9, Edit 5". */
+const toolWords = (tools: Record<string, number>) =>
+  Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(', ')
+
+/** "When the work splits cleanly, start implementers together": a practice as one line. */
+const practiceWords = (p: { when: string; do: string }) => [p.when.trim().replace(/[\s,;:.]+$/, ''), p.do.trim()].filter(Boolean).join(', ')
+
+const LEFT_WORDS: Record<(typeof LEFT_BEHIND)[number], string> = { hooks: 'hooks', mcpServers: 'MCP servers', permissionMode: 'permission mode' }
+
+/** What of a copied agent file stays behind when Run registers it elsewhere, in words; empty when nothing does. */
+function staysBehind(definition: string) {
+  const r = agentSpec(definition)
+  return 'leftBehind' in r ? LEFT_BEHIND.filter(k => r.leftBehind.includes(k)).map(k => LEFT_WORDS[k]) : []
+}
+
+/** A part of the workflow sheet: its name, and at the right whether REDhelm saw it or read it. `stacked` puts the name above, for a narrow sidebar. */
+function Part({ els, name, mark, stacked, children }: { els: Els; name: string; mark?: string; stacked: boolean; children: any }) {
+  const { Box, Text } = els
+  const tag = mark ? <Box flexShrink={0}><Text color="subtle">{mark}</Text></Box> : null
+  if (stacked) {
+    return (
+      <Box flexDirection="column">
+        <Box justifyContent="space-between" columnGap={2}><Text color="subtle">{name}</Text>{tag}</Box>
+        <Box flexDirection="column" paddingLeft={2}>{children}</Box>
+      </Box>
+    )
+  }
+  return (
+    <Box columnGap={2}>
+      <Box width={9} flexShrink={0}><Text color="subtle">{name}</Text></Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1}>{children}</Box>
+      {tag}
+    </Box>
+  )
+}
+
+/**
+ * An agent of the lineup or a role: its label, pressed to open its detail under it; what it ran as, and
+ * whether its type travels with it; for a role, how many agents filled it.
+ */
+function WfItem({ els, act, k, label, setup, mark, ran, open, room, children }:
+  { els: Els; act: Actions; k: number; label: string; setup: string; mark?: string; ran?: number; open: boolean; room: number; children: any }) {
+  const { Box, Text, Button } = els
+  const count = ran === undefined ? '' : `ran ${ran}×`
+  return (
+    <Box flexDirection="column">
+      <Box justifyContent="space-between" columnGap={1}>
+        <Box flexShrink={1} minWidth={4}>
+          <Button key={`wf-item-${k}`} plain label={fit(label, Math.max(4, room - count.length - 1))} hover={{ underline: true, scope: `wf-item-${k}` }}
+            onPress={() => act.wfDetail(open ? null : { kind: 'item', index: k })} />
+        </Box>
+        {count && <Box flexShrink={0}><Text color="subtle">{count}</Text></Box>}
+      </Box>
+      <Box paddingLeft={2}><Text color="subtle" wrap="truncate-end">{mark ? `${setup} · ${mark}` : setup}</Text></Box>
+      {open && <Box flexDirection="column" paddingLeft={2} marginTop={1} gap={1}>{children}</Box>}
+    </Box>
+  )
+}
+
+/**
+ * The review sheet a Save opens: what REDhelm saw at once, and what it read of the session a few seconds
+ * later, under `Reading…`. Each fact is marked `seen` or `read`; a practice opens on the moments it was
+ * read from, an agent or role on its tools, skills, team and (Lineup) whole brief, with Remove. `back`:
+ * drawn inside a panel, with Back to it.
+ */
+export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: View; act: Actions; columns: number; back?: () => void }) {
+  const { Box, Text, Button } = els
+  const w = v.workflow
+  const t = tone(v)
+  const stacked = columns < 50
+  const compact = columns < 30
+  const backButton = back && <Button key="wf-back" plain label="← Back" hover={{ bold: true, scope: 'wf-back' }} onPress={back} />
+  const cancel = <Chip els={els} v={v} k="wf-cancel" text="Cancel" compact={compact} onPress={act.wfClose} />
+  // A sheet longer than the pane scrolls, and its scrollbar takes the last column.
+  const frame = (children: any) => <Box flexDirection="column" gap={1} width={columns} paddingRight={1}>{backButton}{children}</Box>
+  if (w?.mode !== 'review') return frame(null)
+  const d = w.draft
+  if (!d) {
+    return frame(
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Save workflow</Text>
+        <Text color={w.error ? 'error' : 'subtle'} wrap="wrap">{w.error ?? 'No agent work in this session yet'}</Text>
+        <Box>{cancel}</Box>
+      </Box>,
+    )
+  }
+  const pending = d.read === 'pending'
+  // Beside the part's name (9 and a gap) and its mark (`read`, `seen`), or under it, indented; and the scrollbar's column.
+  const room = Math.max(8, columns - (stacked ? 2 : 17) - 1)
+  const isOpen = (kind: Detail['kind'], index: number) => w.detail?.kind === kind && w.detail.index === index
+  const copied = new Map(d.types.map(x => [x.name, x.definition] as const))
+  const markOf = (type: string) => (copied.has(type) ? 'type copied' : d.notCopied.includes(type) ? 'type not copied' : undefined)
+  const line = (key: string, text: string, color?: string) => <Text key={key} color={color} wrap="wrap">{text}</Text>
+  const skills = d.lead.skills
+  const lead = [skills.length ? `${skills.join(', ')} ${skills.length > 1 ? 'skills' : 'skill'}` : 'no skill', short(d.lead.model), d.lead.effort].filter(Boolean).join(' · ')
+
+  /** What an agent and a role both open on: tools, skills, its own team, and a copied type's file whole. Remove while nothing is being read. */
+  const facts = (x: Draft['roles'][number] | Draft['stages'][number]['agents'][number], i: number) => {
+    const tools = toolWords(x.tools)
+    const flags = ['name' in x && x.name ? `name ${x.name}` : '', x.background ? 'background' : '', x.teammate ? 'teammate' : ''].filter(Boolean).join(' · ')
+    const definition = copied.get(x.type)
+    const left = definition === undefined ? [] : staysBehind(definition)
+    return [
+      flags && line(`wf-flags-${i}`, flags, 'subtle'),
+      tools && line(`wf-tools-${i}`, `Tools: ${tools}`, 'subtle'),
+      x.skills.length > 0 && line(`wf-skills-${i}`, `Skills: ${x.skills.join(', ')}`, 'subtle'),
+      ...(x.team ?? []).map((r, j) => {
+        // A role still named by its type reads once: "Explore · haiku", not "Explore · Explore · haiku".
+        const setup = setupWords(r)
+        const words = [setup === r.label || setup.startsWith(`${r.label} · `) ? setup : `${r.label} · ${setup}`, markOf(r.type), `ran ${r.ran}×`].filter(Boolean).join(' · ')
+        return line(`wf-team-${i}-${j}`, `Team: ${words}`, 'subtle')
+      }),
+      // The agent file that travels, whole, on an edge of its own: what is saved is what you saw.
+      definition !== undefined && (
+        <Box key={`wf-type-${i}`}>
+          <Box width={1} flexShrink={0} backgroundColor={t.chip} />
+          <Box paddingLeft={1} flexShrink={1}><Text wrap="wrap">{definition}</Text></Box>
+        </Box>
+      ),
+      left.length > 0 && line(`wf-left-${i}`, `Stays behind: ${left.join(', ')}`, 'subtle'),
+      !pending && <Box key={`wf-rm-${i}`}><Chip els={els} v={v} k={`wf-remove-${i}`} text="Remove" compact onPress={() => act.wfRemove(i)} /></Box>,
+    ]
+  }
+
+  let k = 0
+  const several = d.stages.length > 1
+  const lineup = d.stages.map((st, s) => {
+    const head = [s > 0 && `after ${s}`, st.agents.length > 1 && `${st.agents.length} together`].filter(Boolean).join(' · ')
+    return (
+      <Box key={`wf-stage-${s}`} flexDirection="column">
+        {(several || head) && <Text color="subtle">{[several && String(s + 1), head].filter(Boolean).join('  ')}</Text>}
+        <Box flexDirection="column" paddingLeft={several ? 2 : 0}>
+          {st.agents.map(a => {
+            const i = k++
+            return (
+              <WfItem key={`wf-it-${i}`} els={els} act={act} k={i} label={a.label} setup={setupWords(a)} mark={markOf(a.type)} open={isOpen('item', i)} room={room - (several ? 2 : 0)}>
+                {[
+                  a.description.trim() && a.description.trim() !== a.label && line(`wf-desc-${i}`, a.description.trim(), 'subtle'),
+                  a.brief.trim() && line(`wf-brief-${i}`, a.brief.trim()),
+                  ...facts(a, i),
+                ]}
+              </WfItem>
+            )
+          })}
+        </Box>
+      </Box>
+    )
+  })
+  const roles = d.roles.map((r, i) => (
+    <WfItem key={`wf-it-${i}`} els={els} act={act} k={i} label={r.label} setup={setupWords(r)} mark={markOf(r.type)} ran={r.ran} open={isOpen('item', i)} room={room}>
+      {[r.role.trim() && line(`wf-role-${i}`, r.role.trim()), ...facts(r, i)]}
+    </WfItem>
+  ))
+  const choice = (form: 'roles' | 'lineup', label: string) => (
+    <Box key={`wf-form-${form}`} paddingX={1} backgroundColor={d.form === form ? t.chip : undefined}>
+      <Button key={`wf-${form}`} plain dimColor={d.form !== form} label={label} hover={{ bold: true, scope: `wf-${form}` }} onPress={() => act.wfForm(form)} />
+    </Box>
+  )
+  const parts = d.lead.briefParts
+  const partsOpen = isOpen('parts', 0)
+
+  return frame(
+    <Box flexDirection="column" gap={1}>
+      <Box flexDirection="column">
+        <Text bold>Save workflow</Text>
+        <Box flexDirection="column" paddingLeft={2}>
+          {pending ? <Text color="subtle">Reading…</Text> : (
+            <Box justifyContent="space-between" columnGap={2}>
+              <Text wrap="truncate-end">{d.name}</Text>
+              {d.read === 'done' && <Box flexShrink={0}><Text color="subtle">read</Text></Box>}
+            </Box>
+          )}
+          {!pending && d.purpose && <Text color="subtle" wrap="wrap">{d.purpose}</Text>}
+        </Box>
+        {d.read === 'failed' && <Text color="warning" wrap="wrap">Couldn't read this session's lead</Text>}
+        {w.error && <Text color="error" wrap="wrap">{w.error}</Text>}
+      </Box>
+
+      <Box flexDirection="column" gap={stacked ? 1 : 0}>
+        <Part els={els} name="Lead" stacked={stacked}><Text wrap="wrap">{lead}</Text></Part>
+        {d.lead.playbook.length > 0 && (
+          <Part els={els} name="Playbook" mark="read" stacked={stacked}>
+            {d.lead.playbook.map((p, i) => {
+              const text = practiceWords(p)
+              const open = isOpen('practice', i)
+              return (
+                <Box key={`wf-pr-${i}`} flexDirection="column">
+                  <Box>
+                    <Box width={3} flexShrink={0}><Text color="subtle">{String(i + 1)}</Text></Box>
+                    <Box flexShrink={1} minWidth={4}>
+                      <Button key={`wf-practice-${i}`} plain label={fit(text, Math.max(4, room - 3))} hover={{ underline: true, scope: `wf-practice-${i}` }}
+                        onPress={() => act.wfDetail(open ? null : { kind: 'practice', index: i })} />
+                    </Box>
+                  </Box>
+                  {open && (
+                    <Box flexDirection="column" paddingLeft={3}>
+                      {text.length > room - 3 && line(`wf-pt-${i}`, text)}
+                      {(d.evidence[i] ?? []).map((e, j) => line(`wf-ev-${i}-${j}`, e, 'subtle'))}
+                    </Box>
+                  )}
+                </Box>
+              )
+            })}
+          </Part>
+        )}
+        {parts.length > 0 && (
+          <Part els={els} name="Briefs" mark="seen" stacked={stacked}>
+            <Box>
+              <Button key="wf-parts" plain label={fit(parts[0]!.split('\n')[0]!.trim(), room)} hover={{ underline: true, scope: 'wf-parts' }}
+                onPress={() => act.wfDetail(partsOpen ? null : { kind: 'parts', index: 0 })} />
+            </Box>
+            {partsOpen && <Box flexDirection="column" gap={1} marginTop={1}>{parts.map((p, i) => line(`wf-part-${i}`, p))}</Box>}
+          </Part>
+        )}
+        <Part els={els} name="Save as" stacked={stacked}>
+          <Box>{choice('roles', 'Roles')}<Text color="subtle">·</Text>{choice('lineup', 'Lineup')}</Box>
+        </Part>
+        <Part els={els} name={d.form === 'roles' ? 'Roles' : 'Lineup'} stacked={stacked}>
+          <Box flexDirection="column" gap={1}>{d.form === 'roles' ? roles : lineup}</Box>
+          {d.form === 'lineup' && d.folded.map((f, i) => line(`wf-fold-${i}`, `${f.label} ran ${f.times} times · saved once`, 'subtle'))}
+        </Part>
+      </Box>
+
+      <Box columnGap={1} rowGap={1} flexWrap="wrap">
+        <Chip els={els} v={v} k="wf-keep" text="Save" primary compact={compact} onPress={act.wfKeep} />
+        {d.more && <Chip els={els} v={v} k="wf-earlier" text="Earlier" compact={compact} onPress={act.wfEarlier} />}
+        {cancel}
+      </Box>
+    </Box>,
+  )
+}
+
 /** A newer REDhelm: one quiet line, never a pop-up. */
 function Update({ els, v, act }: { els: Els; v: View; act: Actions }) {
   const { Box, Text, Button } = els
@@ -700,7 +977,8 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       )}
       <Finished els={els} v={v} act={act} strips={done} columns={columns} cells={cells} />
       {overlaps(v.agents).length > 0 && plate(<Overlaps els={els} v={v} />)}
-      <Workflows els={els} v={v} />
+      <Boards els={els} v={v} />
+      {plate(<WorkflowsSection els={els} act={act} />)}
       {v.release && plate(<Update els={els} v={v} act={act} />)}
     </Box>
   )
@@ -780,7 +1058,7 @@ function WideRow({ els, s, v, act, name }: { els: Els; s: Strip; v: View; act: A
 
 /** Bottom: wide and short. The same pieces, one line each; nothing wraps. */
 function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View; act: Actions; columns: number; rows: number; rule: boolean; classic: boolean }) {
-  const { Box, Text } = els
+  const { Box, Text, Button } = els
   const strips = rack(v)
   const needs = strips.filter(s => s.cocked)
   const working = strips.filter(s => !s.cocked && LIVE.has(s.agent.status))
@@ -800,7 +1078,12 @@ function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View
           <Spectrum els={els} v={v} width={20} />
           <Update els={els} v={v} act={act} />
         </Box>
-        {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <WideNotice els={els} v={v} />}
+        <Box flexShrink={1} columnGap={3}>
+          {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <WideNotice els={els} v={v} />}
+          <Box flexShrink={0}>
+            <Button key="wf-bar" plain label="Workflows" hover={{ bold: true, scope: 'wf-bar' }} onPress={act.wfBar} />
+          </Box>
+        </Box>
       </Box>
       {classic && <NoClicks els={els} />}
       <Composer els={els} v={v} act={act} />

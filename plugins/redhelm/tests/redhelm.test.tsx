@@ -166,10 +166,11 @@ const openSheet = async (_$: any, ui: any, id: string, _surface = 'terminal') =>
 /** The mocked clock of the latest engine(), so a test can move time on. */
 let clock: any
 /** `shown`: Claude Code reports REDhelm's pane on screen, so its clock, traces and labels run. */
-const engine = (on: any, isInteractive: boolean, opts: { shown?: boolean } = {}) => async ($: any) => {
+/** `opened`: each pane REDhelm opens, as it asked for it. */
+const engine = (on: any, isInteractive: boolean, opts: { shown?: boolean; opened?: any[] } = {}) => async ($: any) => {
   clock = mock.clock(on)
   mock.store(on)
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_$: any, e: any) => (opts.opened?.push(e), { value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: opts.shown ? [{ id: 'redhelm', title: 'REDhelm', isShown: true }] : [] }))
   on('classic.PostModelSwitch', () => ({}))
@@ -263,7 +264,7 @@ describe('the pane', () => {
 describe('the rack', () => {
   test('orders strips by who needs you next and pulls out the ones that do', async () => {
     const v = {
-      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true,
+      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null, mode: null,
       agents: [
         agent({ id: 'run', startedAt: 1 }),
         agent({ id: 'done', status: 'completed', endedAt: 5 }),
@@ -490,7 +491,7 @@ describe('messaging an agent', () => {
 })
 
 describe('what REDhelm chooses to show', () => {
-  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true }
+  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null, mode: null }
 
   test("only this session's workflows, or ones an agent here is changing; finished runs stay quiet", async () => {
     const ws = (dir: string, extra: object) => ({ dir, name: dir.split('/').pop()!, ...extra })
@@ -2223,5 +2224,193 @@ describe('the library', () => {
     const plan = planText({ ...emptySaved, stages: [{ agents: [{ ...savedAgent, label: 'Docs', brief: 'One\r\nTwo\r\n\r\nThree\r\n' }] }] }, {}, {})
     expect(plan).not.toContain('\r')
     expect(plan.endsWith('\n  Brief:\n  One\n  Two\n\n  Three')).toBe(true)
+  })
+})
+
+describe('saving a workflow', () => {
+  /** The home the test engine reports, as the status-line tests have it. */
+  const HOME = '/h'
+  const said = [you('Write the docs and tests'), lead(call('a1', { model: 'sonnet' }), call('a2', { description: 'Add tests', effort: 'high' })),
+    lead(call('a3', { description: 'Review the change', subagent_type: 'store-reviewer' }))]
+  const reading = JSON.stringify({ name: 'Tests, then a review', purpose: 'Docs and tests, then a review', labels: ['Docs', 'Tests', 'Review'],
+    roles: [{ label: 'Writer', role: 'Writes one part' }, { label: 'Reviewer', role: 'Checks the change' }],
+    playbook: [{ when: 'When parts are independent', do: 'start writers together', evidence: [2] }] })
+  // `asked`, `write` and `own` serve the tests after the plan's five: the requests the model got, how a write answers, agents' own conversations.
+  const setup = (on: any, opts: { said?: Msg[]; answer?: () => any; files?: Record<string, string>; asked?: any[]; write?: () => any; own?: Record<string, Msg[]> } = {}) => {
+    const writes: Record<string, string> = {}
+    on('env.get', () => ({ value: HOME }))
+    on('session.messages', (_$: any, e: any) => ({ value: e.agentId ? opts.own?.[e.agentId] ?? [] : opts.said ?? said }))
+    on('model.complete', (_$: any, e: any) => (opts.asked?.push(e), opts.answer?.() ?? { value: { isAnswered: true, text: reading, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
+    on('fs.list', (_$: any, e: any) => ({ value: Object.keys(opts.files ?? {}).filter(f => f.startsWith(`${e.path}/`)).map(f => ({ name: f.slice(e.path.length + 1), kind: 'file' })) }))
+    on('fs.read', (_$: any, e: any) => (e.path in (opts.files ?? {}) ? { value: opts.files![e.path] } : { error: 'missing' }))
+    on('fs.write', (_$: any, e: any) => opts.write?.() ?? ((writes[e.path] = e.text), { value: undefined }))
+    return writes
+  }
+  const settle = () => new Promise<void>(r => setTimeout(() => r(), 60))
+  test('Save opens the sheet on the latest stretch; the reading fills in after', async ($: any, on: any) => {
+    setup(on)
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' })
+    expect(await ui.find({ type: 'Text', text: /^Save workflow$/ })).toBeDefined()
+    await settle()
+    expect(await ui.find({ type: 'Text', text: /Tests, then a review/ })).toBeDefined()
+    expect((await ui.find({ key: 'wf-item-2' }))?.text).toMatch(/Review/)
+    await ui.press({ key: 'wf-practice-0' })
+    expect(await ui.find({ type: 'Text', text: /#2 lead started general-purpose · sonnet/ })).toBeDefined() // its evidence
+    await ui.unmount()
+  })
+  test('Save writes the chosen form only; a same name becomes "<name> 2"', async ($: any, on: any) => {
+    const writes = setup(on, { files: { [`${HOME}/.claude/redhelm/workflows/tests-then-a-review.json`]: JSON.stringify({ ...emptySaved, id: 'tests-then-a-review', name: 'Tests, then a review' }) } })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle(); await ui.press({ key: 'wf-keep' }); await settle()
+    const path = Object.keys(writes).find(p => /workflows\/tests-then-a-review-2\.json$/.test(p))!
+    expect(JSON.parse(writes[path]!)).toMatchObject({ name: 'Tests, then a review 2', form: 'lineup', roles: [] })
+    await ui.unmount()
+  })
+  test("a project's own type is copied once and marked", async ($: any, on: any) => {
+    const writes = setup(on, { files: { '/p/.claude/agents/store-reviewer.md': '---\nname: store-reviewer\ndescription: Reviews\n---\nYou review.' } })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /type copied/ })).toBeDefined()
+    await ui.press({ key: 'wf-keep' }); await settle()
+    expect(JSON.parse(Object.values(writes)[0]!).types).toEqual([{ name: 'store-reviewer', definition: '---\nname: store-reviewer\ndescription: Reviews\n---\nYou review.' }])
+    await ui.unmount()
+  })
+  test("a failed reading keeps what was seen and says so; no agent work says so", async ($: any, on: any) => {
+    setup(on, { answer: () => ({ value: { isAnswered: false } }) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /Couldn't read this session's lead/ })).toBeDefined()
+    expect((await ui.find({ key: 'wf-item-0' }))?.text).toMatch(/Write the docs/)
+    await ui.unmount()
+  })
+  test('a reading that lands late is dropped', async ($: any, on: any) => {
+    const pending: (() => void)[] = [] // one release per reading, in the order they were asked
+    setup(on, { said: [you('one'), lead(call('a1')), you('two'), lead(call('a2', { description: 'Add tests' }))],
+      answer: () => new Promise(r => pending.push(() => r({ value: { isAnswered: true, text: JSON.stringify({ name: 'Stale', labels: ['X'], roles: [], playbook: [] }), usage: {} } }))) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await ui.press({ key: 'wf-earlier' }); pending[0]!(); await settle() // Save's reading, now stale
+    expect(await ui.find({ type: 'Text', text: /Stale/ })).toBeUndefined()
+    await ui.press({ key: 'wf-cancel' }); pending[1]!(); await settle() // Earlier's reading, after Cancel
+    expect(await ui.find({ type: 'Text', text: /^Save workflow$/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  // Beyond the plan's five: the paths the plan names but does not press.
+  test('a session with no agent work says so, with Cancel', async ($: any, on: any) => {
+    setup(on, { said: [you('What does this function do?'), lead()] })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /^No agent work in this session yet$/ })).toBeDefined()
+    expect(await ui.find({ key: 'wf-keep' })).toBeUndefined()
+    await ui.press({ key: 'wf-cancel' })
+    expect(await ui.find({ key: 'wf-save' })).toBeDefined()
+    await ui.unmount()
+  })
+  test('a session REDhelm cannot read says so', async ($: any, on: any) => {
+    on('session.messages', () => ({ deny: 'no transcript' }))
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /^Couldn't read this session$/ })).toBeDefined()
+    expect(await ui.find({ key: 'wf-cancel' })).toBeDefined()
+    await ui.unmount()
+  })
+  test('the reading runs once per Save whatever the labels setting, and /redhelm models counts it', { options: { labels: 'plain' } } as any, async ($: any, on: any) => {
+    const asked: any[] = []
+    setup(on, { asked })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toMatchObject({ model: 'sonnet', effort: 'low', maxTokens: 1500, timeoutMs: 30_000 })
+    expect(asked[0].prompt).toMatch(/#2 lead started general-purpose · sonnet/)
+    const report = (await $.command.run({ command: 'redhelm', args: 'models', origin: { kind: 'person' }, presentation: {} } as any)).text
+    expect(report).toMatch(/: 1 request, /)
+    await ui.unmount()
+  })
+  test("an item's detail shows its brief, Remove drops it, and Save as Roles saves the roles", async ($: any, on: any) => {
+    const toasts: string[] = []
+    on('ui.toast', (_$: any, e: any) => { toasts.push(e.text); return { value: undefined } })
+    const writes = setup(on)
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    await ui.press({ key: 'wf-item-1' })
+    expect(await ui.find({ type: 'Text', text: /^Write docs\/api\.md$/ })).toBeDefined() // the whole brief, as given
+    await ui.press({ key: 'wf-remove-1' }) // in Lineup, an item is an agent
+    expect(await ui.find({ key: 'wf-item-2' })).toBeUndefined()
+    expect((await ui.find({ key: 'wf-item-1' }))?.text).toMatch(/Review/)
+    await ui.press({ key: 'wf-roles' }) // in Roles, a role: the three setups, each filled once
+    expect(await ui.find({ type: 'Text', text: /ran 1×/ })).toBeDefined()
+    expect(await ui.find({ key: 'wf-item-2' })).toBeDefined()
+    await ui.press({ key: 'wf-item-1' }); await ui.press({ key: 'wf-remove-1' })
+    await ui.press({ key: 'wf-keep' }); await settle()
+    const saved = JSON.parse(Object.values(writes)[0]!)
+    expect(saved).toMatchObject({ name: 'Tests, then a review', form: 'roles', stages: [] })
+    expect(saved.roles.map((r: any) => [r.type, r.model])).toEqual([['general-purpose', 'sonnet'], ['store-reviewer', undefined]]) // the effort-high role went
+    expect(toasts).toContain('Saved · Tests, then a review')
+    expect(await ui.find({ key: 'wf-save' })).toBeDefined() // the section is back
+    await ui.unmount()
+  })
+  test("a write that fails says why and keeps the sheet open", async ($: any, on: any) => {
+    const toasts: string[] = []
+    on('ui.toast', (_$: any, e: any) => { toasts.push(e.text); return { value: undefined } })
+    setup(on, { write: () => ({ deny: 'disk full' }) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle(); await ui.press({ key: 'wf-keep' }); await settle()
+    expect(toasts.some(t => /^Couldn't save · .*disk full/.test(t))).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /^Save workflow$/ })).toBeDefined()
+    expect(await ui.find({ key: 'wf-item-2' })).toBeDefined()
+    await ui.unmount()
+  })
+  test("a project's type whose file is gone is marked; a repeat folds with its count; an agent's own team is in its detail", async ($: any, on: any) => {
+    const review = { description: 'Review the change', subagent_type: 'store-reviewer' }
+    setup(on, {
+      // a3 has no record (REDhelm let it go), so only its lead message places it: a later stage, where it is a repeat of a1.
+      said: [you('Review it, plan, review again'), lead(call('a1', review)), result(), lead(call('a2', { description: 'Plan the fix' })), result(), lead(call('a3', review))],
+      own: { a2: [you('Plan the fix'), lead(call('b1', { description: 'Scout', subagent_type: 'Explore', model: 'haiku' }))] },
+      answer: () => ({ value: { isAnswered: false } }),
+    })
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Review the change', subagentType: 'store-reviewer', provider: { plugin: 'project', tier: 'user' } } as any) // a1
+    await $.agent.spawn({ prompt: 'x', description: 'Plan the fix', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' } } as any) // a2
+    await $.tool.call({ tool: 'Agent', description: 'Scout', prompt: 'Look', agentId: 'a2' } as any) // a2 started an agent of its own
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /store-reviewer · type not copied/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Review the change ran 2 times · saved once$/ })).toBeDefined()
+    await ui.press({ key: 'wf-item-1' })
+    expect(await ui.find({ type: 'Text', text: /^Team: Explore · haiku · ran 1×$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  // The kit raises no ui.close, so the pane closing (Esc) is left to the live check; Back here takes the same path.
+  test('in the bottom bar, Workflows opens its own pane, where the sheet draws; Back returns to Save', async ($: any, on: any) => {
+    const opened: any[] = []
+    setup(on)
+    await engine(on, true, { opened })($)
+    await $.command.run({ command: 'redhelm', args: 'bottom', origin: { kind: 'person' }, presentation: {} } as any)
+    const band = await $.ui.mount({ plugin: 'redhelm', component: 'AbovePrompt', surface: 'terminal',
+      props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 120 } } as any)
+    expect((await band.find({ key: 'wf-bar' }))?.text).toBe('Workflows')
+    await band.press({ key: 'wf-bar' })
+    expect(opened.find(o => o.id === 'redhelm-workflow')).toMatchObject({ closeOnEscape: true, rows: 24 })
+    const pane = await $.ui.mount({ plugin: 'redhelm', component: 'Pane', requestId: 'redhelm-workflow', surface: 'terminal',
+      props: { title: 'Workflows', isFocused: true, bodyColumns: 70, placement: 'inline' } } as any)
+    await pane.press({ key: 'wf-save' }); await settle()
+    expect(await pane.find({ type: 'Text', text: /^Save workflow$/ })).toBeDefined()
+    await pane.press({ key: 'wf-back' }); await settle()
+    expect(await pane.find({ type: 'Text', text: /^Save workflow$/ })).toBeUndefined()
+    expect(await pane.find({ key: 'wf-save' })).toBeDefined()
+    await pane.unmount()
+    await band.unmount()
   })
 })
