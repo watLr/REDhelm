@@ -14,6 +14,7 @@ import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
   READING_CALL, READING_SYSTEM, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
+import { applyOps, checkOps, editRequest, parseEdit, EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -1698,5 +1699,189 @@ describe('the reading', () => {
     const four = readWorkflow({ msgs: [you('go'), lead(call('a1', { description: 'Review the whole store' }), call('a2', { description: 'Check every type here' }),
       call('a3', { description: 'Write the new docs' }), call('a4', { description: 'Extra' }))], records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p', lead: {} })!
     expect(applyReading(four, undefined, []).name).toBe('Review the whole, Check every type')
+  })
+})
+
+describe('editing a draft', () => {
+  const d = () => readWorkflow({ msgs: [you('go'), lead(call('a1'), call('a2', { description: 'Add tests' }))], records: {}, teams: {},
+    list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p', lead: {} })!
+  test('each op applies', () => {
+    const r = applyOps(d(), [{ op: 'rename', name: 'Docs' }, { op: 'set', item: 1, field: 'model', value: 'sonnet' },
+      { op: 'brief', item: 0, find: 'docs/api.md', replace: 'docs/guide.md' }, { op: 'practice', add: { when: 'When tests fail', do: 'fix them, 2 tries' } },
+      { op: 'move', item: 1, stage: 'new' }, { op: 'form', value: 'roles' }])
+    expect(r.name).toBe('Docs')
+    expect(r.stages.map(s => s.agents.map(a => a.label))).toEqual([['Write the docs'], ['Add tests']])
+    expect(r.stages[1]!.agents[0]!.model).toBe('sonnet')
+    expect(r.stages[0]!.agents[0]!.brief).toBe('Write docs/guide.md')
+    expect(r.lead.playbook).toEqual([{ when: 'When tests fail', do: 'fix them, 2 tries' }]) // your own number stays
+    expect(r.form).toBe('roles')
+  })
+  test('one bad op rejects the whole edit and says why', () => {
+    const before = d()
+    expect(checkOps(before, [{ op: 'rename', name: 'X' }, { op: 'remove', item: 7 }])).toBe('No item 8')
+    expect(checkOps(before, [{ op: 'brief', item: 0, find: 'nowhere', replace: 'x' }])).toBe('"nowhere" isn\'t in that brief')
+    expect(checkOps(before, [{ op: 'set', item: 0, field: 'effort', value: 'turbo' }])).toBe("turbo isn't an effort")
+    expect(checkOps({ ...before, form: 'roles' }, [{ op: 'move', item: 0, stage: 'new' }])).toBe('That only applies to Lineup')
+  })
+  test('the edit answer parses ops or a reason', () => {
+    expect(parseEdit('{"ops":[{"op":"rename","name":"X"}]}')).toEqual({ ops: [{ op: 'rename', name: 'X' }] })
+    expect(parseEdit('{"cannot":"There is no reviewer to drop"}')).toEqual({ cannot: 'There is no reviewer to drop' })
+    expect(parseEdit('not json')).toBeUndefined()
+  })
+
+  // Beyond the plan's tests: the rules it states but does not pin.
+  /** Two stages: Docs and Tests together, then Review; three roles; two practices with evidence and two shared parts. */
+  const x = () => {
+    const w = readWorkflow({ msgs: [you('go'), lead(call('a1'), call('a2', { description: 'Add tests', prompt: 'Test it', subagent_type: 'Explore' })), result(),
+      lead(call('a3', { description: 'Review it', prompt: 'Review the change', model: 'opus' }))], records: {}, teams: {}, list: [{ from: 0, to: 4, led: false }], back: 0, root: '/p', lead: {} })!
+    return { ...w, lead: { ...w.lead, skills: ['redmanager'], briefParts: ['Part A', 'Part B'],
+      playbook: [{ when: 'When parts are independent', do: 'start them together' }, { when: 'When a check fails', do: 'send it back' }] },
+      evidence: [['#2 lead started 2 agents'], ['#5 lead ran npm test']] }
+  }
+  const labels = (r: { stages: { agents: { label: string }[] }[] }) => r.stages.map(s => s.agents.map(a => a.label))
+  const BAD = "That isn't an edit REDhelm can make"
+
+  test('numbers mean the draft as listed, whatever ran before them; a stage left empty is dropped', () => {
+    expect(labels(applyOps(x(), [{ op: 'remove', item: 0 }, { op: 'remove', item: 1 }]))).toEqual([['Review it']])
+    expect(labels(applyOps(x(), [{ op: 'move', item: 2, stage: 0 }, { op: 'remove', item: 0 }]))).toEqual([['Add tests', 'Review it']])
+    // A stage "new" adds takes the next number.
+    expect(labels(applyOps(x(), [{ op: 'move', item: 0, stage: 'new' }, { op: 'move', item: 1, stage: 2 }]))).toEqual([['Review it'], ['Write the docs', 'Add tests']])
+    expect(checkOps(x(), [{ op: 'remove', item: 1 }, { op: 'set', item: 1, field: 'label', value: 'Gone' }])).toBe('No item 2')
+    // After `form`, items are the other form's.
+    expect(applyOps(x(), [{ op: 'form', value: 'roles' }, { op: 'remove', item: 1 }]).roles.map(r => r.type)).toEqual(['general-purpose', 'general-purpose'])
+  })
+
+  test('practices, shared parts and lead skills; a practice you rewrite leaves its evidence behind', () => {
+    const r = applyOps(x(), [{ op: 'practice', add: { when: 'When  the docs\nchange', do: 'rebuild them' }, at: 1 }, { op: 'practice', remove: 0 },
+      { op: 'practice', add: { when: 'Last', do: 'appended' } }, { op: 'part', remove: 0 }, { op: 'lead', add: ['brainstorming', 'brainstorming'], remove: ['redmanager'] }])
+    expect(r.lead.playbook).toEqual([{ when: 'When the docs change', do: 'rebuild them' }, { when: 'When a check fails', do: 'send it back' }, { when: 'Last', do: 'appended' }])
+    expect(r.evidence).toEqual([[], ['#5 lead ran npm test'], []])
+    expect(r.lead.briefParts).toEqual(['Part B'])
+    expect(r.lead.skills).toEqual(['brainstorming'])
+    const set = applyOps(x(), [{ op: 'practice', index: 0, set: { when: 'When work splits', do: 'start 3 together' } }])
+    expect(set.lead.playbook[0]).toEqual({ when: 'When work splits', do: 'start 3 together' })
+    expect(set.evidence).toEqual([[], ['#5 lead ran npm test']])
+    expect(applyOps(x(), [{ op: 'practice', add: { when: 'At the end', do: 'x' }, at: 2 }]).lead.playbook[2]).toEqual({ when: 'At the end', do: 'x' })
+  })
+
+  test('each item op, in Lineup and in Roles', () => {
+    const r = applyOps(x(), [{ op: 'set', item: 2, field: 'model', value: null }, { op: 'set', item: 0, field: 'isolation', value: 'worktree' },
+      { op: 'set', item: 0, field: 'effort', value: 'high' }, { op: 'set', item: 0, field: 'background', value: true }, { op: 'set', item: 1, field: 'label', value: 'Tests' },
+      { op: 'set', item: 1, field: 'type', value: 'store-tester' }, { op: 'brief', item: 1, append: 'Run them twice.' },
+      { op: 'brief', item: 2, find: 'the', replace: '$& $1' }, { op: 'skills', item: 0, add: ['tdd'] }, { op: 'tools', item: 0, add: ['Bash', 'constructor'] },
+      { op: 'add', stage: 0, item: { label: 'Lint', type: 'general-purpose', description: 'Lint it', brief: 'Run the linter', effort: 'low' } },
+      { op: 'add', stage: 'new', item: { label: 'Ship', type: 'general-purpose', description: 'Ship it', brief: 'Ship' } }])
+    expect(labels(r)).toEqual([['Write the docs', 'Tests', 'Lint'], ['Review it'], ['Ship']])
+    const [docs, tests, lint] = r.stages[0]!.agents
+    expect(docs).toMatchObject({ isolation: 'worktree', effort: 'high', background: true, skills: ['tdd'] })
+    expect(Object.entries(docs!.tools)).toEqual([['Bash', 0], ['constructor', 0]]) // a tool added was never used
+    expect(tests).toMatchObject({ type: 'store-tester', brief: 'Test it\n\nRun them twice.' })
+    expect('model' in r.stages[1]!.agents[0]!).toBe(false)
+    expect(r.stages[1]!.agents[0]!.brief).toBe('Review $& $1 change') // the replacement is text, never a pattern
+    expect(lint).toEqual({ label: 'Lint', description: 'Lint it', brief: 'Run the linter', type: 'general-purpose', effort: 'low', background: false, teammate: false, tools: {}, skills: [] })
+    const roles = applyOps({ ...x(), form: 'roles' }, [{ op: 'set', item: 0, field: 'role', value: 'Writes the docs' }, { op: 'remove', item: 1 },
+      { op: 'skills', item: 0, add: ['a', 'b'] }, { op: 'skills', item: 0, remove: ['a'] }, { op: 'set', item: 2, field: 'teammate', value: true },
+      { op: 'add', item: { label: 'Linter', type: 'general-purpose', role: 'Lints each change', model: 'haiku' } }])
+    expect(roles.roles.map(r => [r.label, r.role, r.skills, r.teammate])).toEqual([['general-purpose', 'Writes the docs', ['b'], false],
+      ['general-purpose', '', [], true], ['Linter', 'Lints each change', [], false]])
+    expect(roles.roles[2]).toMatchObject({ model: 'haiku', ran: 0, tools: {} })
+    expect(roles.stages).toEqual(x().stages) // the other form is left as it was
+  })
+
+  test('removing an agent drops the repeats folded into it', () => {
+    const f = readWorkflow({ msgs: [you('go'), lead(call('a1'), call('a2', { description: 'Add tests' })), result(), lead(call('a3', { description: 'Add tests' }))],
+      records: {}, teams: {}, list: [{ from: 0, to: 4, led: false }], back: 0, root: '/p', lead: {} })!
+    expect(f.folded).toEqual([{ label: 'Add tests', times: 2 }])
+    expect(applyOps(f, [{ op: 'remove', item: 1 }]).folded).toEqual([])
+    expect(applyOps(f, [{ op: 'remove', item: 0 }]).folded).toEqual([{ label: 'Add tests', times: 2 }])
+  })
+
+  test('every reason, in one line', () => {
+    const c = (...ops: Op[]) => checkOps(x(), ops)
+    const roles = (...ops: Op[]) => checkOps({ ...x(), form: 'roles' }, ops)
+    expect(c({ op: 'move', item: 0, stage: 2 })).toBe('No stage 3')
+    expect(c({ op: 'add', stage: 5, item: { label: 'X', type: 'general-purpose', description: 'X', brief: 'X' } })).toBe('No stage 6')
+    expect(c({ op: 'practice', remove: 2 })).toBe('No practice 3')
+    expect(c({ op: 'practice', index: 2, set: { when: 'a', do: 'b' } })).toBe('No practice 3')
+    expect(c({ op: 'practice', add: { when: 'a', do: 'b' }, at: 3 })).toBe('No practice 4')
+    expect(c({ op: 'part', remove: 0 }, { op: 'part', remove: 0 })).toBe('No shared part 1')
+    expect(c({ op: 'set', item: 0, field: 'isolation', value: 'sideways' })).toBe("sideways isn't an isolation")
+    expect(c({ op: 'set', item: 0, field: 'effort', value: true })).toBe("true isn't an effort")
+    expect(c({ op: 'add', stage: 0, item: { label: 'X', type: 'general-purpose', description: 'X', brief: 'X', effort: 'turbo' } })).toBe("turbo isn't an effort")
+    expect(c({ op: 'set', item: 0, field: 'role', value: 'Writes' })).toBe('That only applies to Roles')
+    expect(c({ op: 'add', stage: 0, item: { label: 'X', type: 'general-purpose', description: 'X', brief: 'X', role: 'Writes' } })).toBe('That only applies to Roles')
+    expect(roles({ op: 'brief', item: 0, append: 'x' })).toBe('That only applies to Lineup')
+    expect(roles({ op: 'add', stage: 0, item: { label: 'X', type: 'general-purpose', role: 'Writes' } })).toBe('That only applies to Lineup')
+    expect(c({ op: 'practice', add: { when: 'x'.repeat(121), do: 'b' } })).toBe('A practice is at most 120 characters')
+    expect(c({ op: 'practice', add: { when: 'a', do: 'x'.repeat(120) } })).toBeUndefined()
+    expect(c({ op: 'brief', item: 0, find: `${'long '.repeat(20)}\nfind`, replace: 'x' })).toBe(`"${'long '.repeat(12).trim()}…" isn't in that brief`)
+    expect(c({ op: 'rename', name: 'x'.repeat(41) })).toBe('A name is at most 40 characters')
+    expect(c({ op: 'purpose', text: 'x'.repeat(91) })).toBe('A purpose is at most 90 characters')
+    expect(c({ op: 'set', item: 0, field: 'label', value: 'x'.repeat(17) })).toBe('A label is at most 16 characters')
+    expect(roles({ op: 'set', item: 0, field: 'role', value: 'x'.repeat(91) })).toBe('A role is at most 90 characters')
+    expect(c({ op: 'purpose', text: '' }, { op: 'set', item: 0, field: 'isolation', value: null })).toBeUndefined()
+  })
+
+  test('anything malformed is refused with a reason, never thrown, and leaves the draft as it was', () => {
+    const bad: unknown[] = [null, 'rename', [], {}, { op: 'constructor' }, { op: '__proto__' }, { op: 'toString', name: 'X' }, { op: 'rename' }, { op: 'rename', name: 3 },
+      { op: 'rename', name: '  ' }, { op: 'form', value: 'both' }, { op: 'set', item: 0, field: 'toString', value: 'x' }, { op: 'set', item: '0', field: 'model', value: 'x' },
+      { op: 'set', item: 0, field: 'background', value: 'yes' }, { op: 'set', item: 0, field: 'label', value: null }, { op: 'remove', item: -1 }, { op: 'remove', item: 1.5 },
+      { op: 'remove' }, { op: 'move', item: 0, stage: 'next' }, { op: 'practice', add: { when: 'a', do: 'b' }, remove: 0 }, { op: 'practice', add: 'When x, do y' },
+      { op: 'practice', index: 0 }, { op: 'practice', add: { when: 'a', do: 'b' }, at: -1 }, { op: 'part' }, { op: 'brief', item: 0, find: 'Write', replace: 'b', append: 'c' },
+      { op: 'brief', item: 0, find: '', replace: 'x' }, { op: 'brief', item: 0, find: 'Write' }, { op: 'brief', item: 0 }, { op: 'lead', add: 'x' }, { op: 'lead', remove: [''] },
+      { op: 'skills', item: 0, add: [1] }, { op: 'tools', item: 0, remove: {} }, { op: 'add', stage: 'new', item: { label: 'X', type: 'general-purpose', description: 'd' } },
+      { op: 'add', item: { label: 'X', type: 'general-purpose', description: 'd', brief: 'b' } }, { op: 'add', stage: 'new' }, { op: 'add', stage: 'new', item: [] }]
+    for (const op of bad) {
+      const before = x()
+      expect([op, checkOps(before, [op as Op])]).toEqual([op, BAD])
+      expect(applyOps(before, [{ op: 'rename', name: 'Changed' }, op as Op])).toBe(before)
+    }
+    expect(checkOps(x(), 'ops' as any)).toBe(BAD)
+    expect(checkOps({ ...x(), form: 'roles' }, [{ op: 'add', item: { label: 'X', type: 'general-purpose' } } as any])).toBe(BAD) // Roles needs a role
+  })
+
+  test('the draft you pass is never changed', () => {
+    const deepFreeze = (o: any): any => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.values(o).forEach(deepFreeze); Object.freeze(o) } return o }
+    const all: Op[] = [{ op: 'rename', name: 'New' }, { op: 'purpose', text: 'New purpose' }, { op: 'lead', add: ['tdd'], remove: ['redmanager'] },
+      { op: 'practice', add: { when: 'a', do: 'b' }, at: 0 }, { op: 'practice', remove: 1 }, { op: 'practice', index: 0, set: { when: 'c', do: 'd' } }, { op: 'part', remove: 1 },
+      { op: 'set', item: 0, field: 'model', value: 'opus' }, { op: 'set', item: 2, field: 'model', value: null }, { op: 'brief', item: 0, find: 'docs', replace: 'guide' },
+      { op: 'brief', item: 1, append: 'More' }, { op: 'skills', item: 0, add: ['s'] }, { op: 'tools', item: 1, add: ['Bash'] }, { op: 'move', item: 0, stage: 'new' },
+      { op: 'add', stage: 0, item: { label: 'L', type: 'general-purpose', description: 'L', brief: 'L' } }, { op: 'remove', item: 1 },
+      { op: 'form', value: 'roles' }, { op: 'set', item: 0, field: 'role', value: 'Writes' }, { op: 'skills', item: 0, add: ['r'] }, { op: 'tools', item: 0, remove: ['Read'] },
+      { op: 'add', item: { label: 'R', type: 'Explore', role: 'Looks' } }, { op: 'remove', item: 2 }]
+    const before = x()
+    const seen = JSON.stringify(before)
+    const r = applyOps(deepFreeze(before), all)
+    expect(JSON.stringify(before)).toBe(seen)
+    expect(r).not.toBe(before)
+    expect(r.name).toBe('New')
+    expect(r.roles.map(role => role.label)).toEqual(['general-purpose', 'Explore', 'R'])
+  })
+
+  test('the request lists both forms numbered as the sheet numbers them, with what an op names each by', () => {
+    const w = x()
+    const long = { ...w, name: 'Docs', stages: [{ agents: [{ ...w.stages[0]!.agents[0]!, brief: `Line one\n${'p'.repeat(400)}`, effort: 'low', skills: ['tdd'], tools: { Read: 3 } }] }, ...w.stages.slice(1)] }
+    const q = editRequest(long, '  drop the review  ')
+    expect(q.system).toBe(EDIT_SYSTEM)
+    expect(q.prompt).toContain('Name: "Docs"\nPurpose: none\nForm: lineup\nLead skills: redmanager\n')
+    expect(q.prompt).toContain('Practices:\n1. [0] when "When parts are independent", do "start them together"\n2. [1] when "When a check fails", do "send it back"\n')
+    expect(q.prompt).toContain('Shared brief parts:\n1. [0] "Part A"\n2. [1] "Part B"\n')
+    expect(q.prompt).toContain(`Stage 1 [0]:\n1. [0] Write the docs · general-purpose · effort low · skills tdd · tools Read · description "Write the docs" · brief, its first 300 of 409 characters: ${JSON.stringify(`Line one\n${'p'.repeat(291)}`)}\n`)
+    expect(q.prompt).toContain('Stage 2 [1]:\n2. [1] Review it · general-purpose · model opus · description "Review it" · brief "Review the change"\n')
+    expect(q.prompt).toContain('Roles, the items while the form is roles:\n1. [0] general-purpose · general-purpose · ran 1 time · role ""\n2. [1] Explore · Explore · ran 1 time · role ""\n')
+    expect(q.prompt.endsWith('\n\nThe change asked for: drop the review')).toBe(true)
+    expect(editRequest({ ...w, lead: { ...w.lead, skills: [], playbook: [], briefParts: [] }, evidence: [] }, 'x').prompt).toContain('Lead skills: none\nPractices: none\nShared brief parts: none\n')
+    for (const op of ['rename', 'purpose', 'form', 'lead', 'practice', 'part', 'remove', 'move', 'set', 'brief', 'skills" | "tools', 'add']) expect(EDIT_SYSTEM).toContain(`"op": "${op}"`)
+    expect(EDIT_SYSTEM).toContain('{"cannot": "')
+    expect(EDIT_CALL).toEqual({ model: 'sonnet', effort: 'low', maxTokens: 1200, timeoutMs: 30_000 })
+  })
+
+  test('an answer is the JSON object in it: fenced or prefaced still parses; anything else is no answer', () => {
+    expect(parseEdit('Here you go:\n```json\n{"ops": [{"op": "remove", "item": 2}]}\n```')).toEqual({ ops: [{ op: 'remove', item: 2 }] })
+    expect(parseEdit('{"ops": [], "cannot": "  There is no reviewer  "}')).toEqual({ cannot: 'There is no reviewer' })
+    expect(parseEdit('{"ops": []}')).toEqual({ ops: [] })
+    for (const t of [undefined, '', '[{"op": "rename", "name": "X"}]', '"ops"', '{}', '{"ops": [1]}', '{"ops": [null]}', '{"ops": "rename"}', '{"cannot": ""}', '{"cannot": 3}', '{"ops": [{"op": "rename"']) {
+      expect([t, parseEdit(t)]).toEqual([t, undefined])
+    }
   })
 })

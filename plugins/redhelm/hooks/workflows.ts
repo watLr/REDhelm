@@ -62,7 +62,7 @@ function acts(msgs: readonly Msg[], i: number): (string | Use)[] {
 const end = (msgs: readonly Msg[], to: number) => Math.min(to, msgs.length)
 
 /** The object without its undefined fields, so a draft and the file saved from it read alike. */
-const compact = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T
+export const compact = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T
 
 /** Whether the assistant message at `i` opens a lead message: the one before it is not the lead's too. */
 const opens = (msgs: readonly Msg[], i: number) => msgs[i - 1]?.role !== 'assistant'
@@ -238,10 +238,10 @@ export function defaultForm(msgs: readonly Msg[], s: Stretch): 'roles' | 'lineup
 // Roles, teams and shared brief parts
 
 /** A label's length, at most. */
-const LABEL = 16
+export const LABEL = 16
 
 /** The first `n` characters, never half of a character written as two. */
-const head = (text: string, n: number) => text.slice(0, n).replace(/[\uD800-\uDBFF]$/, '')
+export const head = (text: string, n: number) => text.slice(0, n).replace(/[\uD800-\uDBFF]$/, '')
 
 /** A label from a description or a type: at most 16 characters (or `n`), cut at a word where there is one. */
 function labelOf(text: string, n = LABEL) {
@@ -578,10 +578,10 @@ export const READING_SYSTEM = [
 ].join('\n')
 
 /** The longest a reading's values may be; a longer one is dropped, never cut. */
-const NAME = 40
-const PURPOSE = 90
-const ROLE = 90
-const PRACTICE = 120
+export const NAME = 40
+export const PURPOSE = 90
+export const ROLE = 90
+export const PRACTICE = 120
 const PRACTICES = 8
 /** How much of a workflow script and of each brief the reading is given. */
 const SCRIPT = 6000
@@ -620,7 +620,7 @@ export function readingRequest(d: Draft, trace: readonly TraceEvent[], script?: 
 export type Reading = { name?: string; purpose?: string; labels?: string[]; roles?: { label: string; role: string }[]; playbook: Practice[]; evidence: number[][] }
 
 /** The answer's object: from its first `{` to its last `}`, so a fenced or prefaced answer still parses. */
-function answerOf(text: string | undefined) {
+export function answerOf(text: string | undefined) {
   if (!text) return undefined
   try {
     const o: unknown = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
