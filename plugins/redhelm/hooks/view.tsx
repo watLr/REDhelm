@@ -942,8 +942,8 @@ function WorkflowParts({ els, v, act, d, detail, room, stacked, review }:
  * - The review sheet a Save opens: what REDhelm saw at once, and what it read of the session a few
  *   seconds later, under `Reading…`; each fact marked `seen` or `read`. Edit takes the change in the
  *   prompt box (`Applying…` while it applies) and Undo steps back one change. Nothing changes while
- *   the reading is out: it names the items as they were when it was asked. Save waits out an edit
- *   applying, and a form with no items has none.
+ *   the reading is out: it names the items as they were when it was asked. Save and Earlier wait out
+ *   an edit applying, and a form with no items has no Save.
  * - A saved workflow, opened from the library: the same parts, with Run, Delete and Close, and one line
  *   when this session runs on another model than the lead did.
  */
@@ -1026,7 +1026,7 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
         {items > 0 && !busy && chip('wf-keep', 'Save', act.wfKeep, true)}
         {!pending && chip('wf-edit', 'Edit', act.wfEdit)}
         {!pending && !busy && w.undo.length > 0 && chip('wf-undo', 'Undo', act.wfUndo)}
-        {d.more && chip('wf-earlier', 'Earlier', act.wfEarlier)}
+        {d.more && !busy && chip('wf-earlier', 'Earlier', act.wfEarlier)}
         {cancel}
       </Box>
     </Box>,

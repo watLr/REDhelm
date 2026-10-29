@@ -189,8 +189,12 @@ export type WorkflowSheet =
   | { mode: 'review'; draft?: Draft; error?: string; undo: Draft[]; busy?: 'applying'; detail?: Detail; token: number }
   | { mode: 'saved'; id: string; armed?: boolean; detail?: Detail }
 
-/** Who owns the prompt box besides Reply: an edit of the open draft, or a run of a saved workflow. */
-export type WorkflowMode = null | { kind: 'edit' }
+/**
+ * Who owns the prompt box besides Reply: an edit of the open draft, or a run of a saved workflow. `pane`:
+ * the edit was started in the bottom bar's Workflows pane, which REDhelm closed for the keys to reach the
+ * prompt and opens again when the edit lands.
+ */
+export type WorkflowMode = null | { kind: 'edit'; pane?: true }
   | { kind: 'run'; id: string; name: string; registered: Record<string, string>; leftBehind: Record<string, string[]> }
 
 declare module 'claude-code' {

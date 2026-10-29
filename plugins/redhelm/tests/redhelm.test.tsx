@@ -166,12 +166,12 @@ const openSheet = async (_$: any, ui: any, id: string, _surface = 'terminal') =>
 /** The mocked clock of the latest engine(), so a test can move time on. */
 let clock: any
 /** `shown`: Claude Code reports REDhelm's pane on screen, so its clock, traces and labels run. */
-/** `opened`: each pane REDhelm opens, as it asked for it. */
-const engine = (on: any, isInteractive: boolean, opts: { shown?: boolean; opened?: any[] } = {}) => async ($: any) => {
+/** `opened`: each pane REDhelm opens, as it asked for it. `closed`: each pane it closes. */
+const engine = (on: any, isInteractive: boolean, opts: { shown?: boolean; opened?: any[]; closed?: any[] } = {}) => async ($: any) => {
   clock = mock.clock(on)
   mock.store(on)
   on('ui.open', (_$: any, e: any) => (opts.opened?.push(e), { value: { isPlaced: true } }))
-  on('ui.close', () => ({ value: undefined }))
+  on('ui.close', (_$: any, e: any) => (opts.closed?.push(e), { value: undefined }))
   on('ui.panes', () => ({ value: opts.shown ? [{ id: 'redhelm', title: 'REDhelm', isShown: true }] : [] }))
   on('classic.PostModelSwitch', () => ({}))
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => { // Claude Code's own (empty) band
@@ -2433,6 +2433,8 @@ const PEEK = {
     on('tool.call', async ($: any, e: any, next: any) => {
       if (e.tool === 'RedhelmMode') return { result: { value: (await $.state.get({ plugin: 'redhelm', key: 'workflowMode' })).value ?? null } }
       if (e.tool === 'RedhelmComposing') return { result: { value: (await $.state.get({ plugin: 'redhelm', key: 'composing' })).value ?? null } }
+      // A close of the bottom bar's Workflows pane that REDhelm did not start.
+      if (e.tool === 'ClosePane') return (await $.ui.close({ id: 'redhelm-workflow' }), { result: { value: null } })
       return next(e)
     })
   },
@@ -2905,6 +2907,170 @@ describe('editing and running a workflow', () => {
       await ui.press({ key: 'wf-load' }); await settle() // put away for the next surface
       await ui.unmount()
     }
+  })
+
+  // The review's fixes.
+  test('a prompt the guard holds changes nothing: a run or a reply stays open, and the box keeps what you typed', async ($: any, on: any) => {
+    on('config.list', () => ({ value: [] }))
+    on('settings.read', () => ({ value: {} }))
+    on('session.send', () => ({ isDelivered: true }))
+    const box = promptBox(on, 'half a prompt')
+    setup(on, { files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+    const sw = (source: string, to: string) => ($ as any).classic.PostModelSwitch({ from_model: 'claude-fable-5-1', to_model: to, requested_model: null, source })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle()
+    await sw('auto', 'claude-opus-4-8')
+    expect((await $.prompt.submit({ text: 'something else' })).drop).toMatch(/switched models on its own/)
+    await clock.advance(200); await settle()
+    expect(box.text).toBe('▶ Tests, then a review: ') // never overwritten with the old draft
+    await sw('picker', 'claude-fable-5-1')
+    await $.prompt.submit({ text: '▶ Tests, then a review: go' }) // the run was still open
+    expect(box.passed.map(p => p.text)).toEqual(['Run my saved REDhelm workflow "Tests, then a review". My notes for this run: go'])
+    await clock.advance(200); await settle()
+    expect(box.text).toBe('half a prompt') // and its draft still kept
+    // The same with a Reply open.
+    const sheet = await openSheet($, ui, 'a1')
+    await sheet.press({ key: 'compose-a1' }); await sheet.unmount(); await settle()
+    expect(box.text).toBe('→ docs: ')
+    await sw('auto', 'claude-opus-4-8')
+    expect((await $.prompt.submit({ text: 'a question for Claude' })).drop).toMatch(/switched models on its own/)
+    await clock.advance(200); await settle()
+    expect(box.text).toBe('→ docs: ')
+    expect(await ui.find({ type: 'Text', text: /Writing to Docs/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test("✎ text is never Claude's while an edit is out or the review sheet is open", async ($: any, on: any) => {
+    const asked: any[] = []
+    let release = () => {}
+    const box = promptBox(on, 'half a prompt')
+    setup(on, { asked, answer: e => (e.system === EDIT_SYSTEM ? new Promise(r => (release = () => r(answered('{"ops":[{"op":"remove","item":2}]}')))) : undefined) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    await ui.press({ key: 'wf-edit' }); await settle()
+    expect((await $.prompt.submit({ text: '✎ Workflow: drop the review' })).drop).toBe('✎ Workflow: applying')
+    // Enter again before the draft is back, while the box still holds the edit just sent.
+    expect((await $.prompt.submit({ text: '✎ Workflow: drop the review' })).drop).toBe('✎ Workflow: applying')
+    release(); await clock.advance(200); await settle()
+    expect(asked.filter(a => a.system === EDIT_SYSTEM)).toHaveLength(1)
+    expect(await ui.find({ key: 'wf-item-2' })).toBeUndefined()
+    expect(await ui.find({ key: 'wf-item-1' })).toBeDefined()
+    // No edit out, but the sheet open: typed by hand, it is still not Claude's.
+    expect((await $.prompt.submit({ text: '✎ Workflow: drop the docs' })).drop).toBe('✎ Workflow: applying')
+    expect(box.passed).toEqual([])
+    await ui.press({ key: 'wf-cancel' }); await settle()
+    await $.prompt.submit({ text: '✎ Workflow: drop the docs' }) // no sheet: your own text
+    expect(box.passed.map(p => p.text)).toEqual(['✎ Workflow: drop the docs'])
+    await ui.unmount()
+  })
+
+  test('an edit still out when the session restarts never lands, and Applying… does not stick', async ($: any, on: any) => {
+    const releases: (() => void)[] = []
+    const ops = ['{"ops":[{"op":"remove","item":2}]}', '{"ops":[{"op":"remove","item":0}]}', '{"ops": []}']
+    const box = promptBox(on)
+    on('session.end', (_$: any, e: any) => ({ sessionId: e.sessionId }))
+    setup(on, { answer: e => (e.system === EDIT_SYSTEM ? new Promise(r => releases.push(() => r(answered(ops.shift()!)))) : undefined) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const edit = async (ask: string) => {
+      await ui.press({ key: 'wf-edit' }); await settle()
+      await $.prompt.submit({ text: `${box.text}${ask}` }); await settle()
+    }
+    const applying = async () => !!(await ui.find({ type: 'Text', text: /^Applying…$/ }))
+    await ui.press({ key: 'wf-save' }); await settle()
+    await edit('drop the review')
+    expect(await applying()).toBe(true)
+    await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
+    await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true }); await settle()
+    expect(await applying()).toBe(false)
+    await edit('drop the docs')
+    expect(await applying()).toBe(true)
+    releases[0]!(); await settle() // the last session's edit: it lands nothing and counts nothing
+    expect(await ui.find({ key: 'wf-item-2' })).toBeDefined()
+    expect(await applying()).toBe(true)
+    releases[1]!(); await settle()
+    expect(await applying()).toBe(false)
+    expect((await ui.find({ key: 'wf-item-0' }))?.text).toMatch(/Tests/)
+    await edit('nothing really') // the count is still right
+    expect(await applying()).toBe(true)
+    releases[2]!(); await settle()
+    expect(await applying()).toBe(false)
+    await ui.unmount()
+  })
+
+  test('a second Run while one is registering is ignored, so its mark never becomes your draft', async ($: any, on: any) => {
+    const releases: (() => void)[] = []
+    on('agent.register', (_$: any, e: any) => new Promise(r => releases.push(() => r({ value: { agent: `redhelm:${e.name}` } }))))
+    const box = promptBox(on, 'half a prompt')
+    setup(on, { files: library(savedOne({ id: 'review', name: 'Review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
+      stages: [{ agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', brief: 'Review the store' }] }] })) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-run-review' })
+    await ui.press({ key: 'wf-run-review' }); await settle()
+    expect(releases).toHaveLength(1)
+    releases.forEach(r => r()); await settle()
+    expect(box.text).toBe('▶ Review: ')
+    await $.prompt.submit({ text: 'something else' }); await clock.advance(200); await settle()
+    expect(box.text).toBe('half a prompt')
+    await ui.unmount()
+  })
+
+  test('Earlier waits out an edit applying', async ($: any, on: any) => {
+    let release = () => {}
+    const box = promptBox(on)
+    setup(on, { said: [you('one'), lead(call('a1')), you('two'), lead(call('a2', { description: 'Add tests' }))],
+      answer: e => (e.system === EDIT_SYSTEM ? new Promise(r => (release = () => r(answered('{"ops": []}')))) : undefined) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(await ui.find({ key: 'wf-earlier' })).toBeDefined()
+    await ui.press({ key: 'wf-edit' }); await settle()
+    await $.prompt.submit({ text: `${box.text}keep it` }); await settle()
+    expect(await ui.find({ key: 'wf-earlier' })).toBeUndefined()
+    release(); await settle()
+    expect(await ui.find({ key: 'wf-earlier' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test("Edit in the bottom bar's Workflows pane hands the keys to the prompt, and the pane comes back when the edit lands", { plugins: [PEEK] }, async ($: any, on: any) => {
+    const opened: any[] = []
+    const closed: any[] = []
+    const box = promptBox(on, 'half a prompt')
+    setup(on, { answer: editsWith('{"ops":[{"op":"remove","item":2}]}') })
+    await engine(on, true, { opened, closed })($)
+    await $.command.run({ command: 'redhelm', args: 'bottom', origin: { kind: 'person' }, presentation: {} } as any)
+    const band = await $.ui.mount({ plugin: 'redhelm', component: 'AbovePrompt', surface: 'terminal',
+      props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 120 } } as any)
+    await band.press({ key: 'wf-bar' })
+    const pane = await $.ui.mount({ plugin: 'redhelm', component: 'Pane', requestId: 'redhelm-workflow', surface: 'terminal',
+      props: { title: 'Workflows', isFocused: true, bodyColumns: 70, placement: 'inline' } } as any)
+    await pane.press({ key: 'wf-save' }); await settle()
+    const shown = () => opened.filter(o => o.id === 'redhelm-workflow').length
+    expect(shown()).toBe(1)
+    await pane.press({ key: 'wf-edit' }); await settle()
+    expect(box.text).toBe('✎ Workflow: ')
+    expect(closed.map(c => c.id)).toContain('redhelm-workflow')
+    expect(await peek($, 'workflowMode')).toEqual({ kind: 'edit', pane: true }) // REDhelm's own close kept the edit
+    expect(await pane.find({ type: 'Text', text: /^Save workflow$/ })).toBeDefined() // and the sheet
+    await $.prompt.submit({ text: '✎ Workflow: drop the review' }); await clock.advance(200); await settle()
+    expect(shown()).toBe(2)
+    expect(opened.at(-1)).toMatchObject({ id: 'redhelm-workflow', closeOnEscape: true, rows: 24 })
+    expect(await pane.find({ key: 'wf-item-2' })).toBeUndefined()
+    expect(box.text).toBe('half a prompt')
+    // A close REDhelm did not start for an edit still takes the sheet, and the edit, with it.
+    await pane.press({ key: 'wf-edit' }); await settle()
+    await $.tool.call({ tool: 'ClosePane' } as any); await settle()
+    expect(await peek($, 'workflowMode')).toBeNull()
+    expect(box.text).toBe('half a prompt')
+    expect(await pane.find({ type: 'Text', text: /^Save workflow$/ })).toBeUndefined()
+    await pane.unmount()
+    await band.unmount()
   })
 
   test("a project's agent file that is a symbolic link is found", async ($: any, on: any) => {
