@@ -1,4 +1,5 @@
 import type { Draft, Lead, Practice, SavedAgent, SavedRole, SavedType, SavedWorkflow } from '../types'
+import { LEFT_BEHIND } from './agentfile'
 import { hash } from './labels'
 import { answerOf, compact, head, LABEL, NAME, PRACTICE, PURPOSE, ROLE } from './workflows'
 
@@ -6,8 +7,8 @@ import { answerOf, compact, head, LABEL, NAME, PRACTICE, PURPOSE, ROLE } from '.
  * What happens to a draft after Save read it. An edit in your words goes to the model, which answers
  * with operations, never a rewritten workflow, so a brief is never shortened or mangled behind your
  * back. Every op is checked before any applies; one bad op rejects the edit, with a reason in one
- * line. Then the saved file and the library, the plan Claude gets when you press Run, and a
- * project's agent file read so it can travel. Pure: no engine calls, no file reads.
+ * line. Then the saved file and the library, and the plan Claude gets when you press Run. Pure: no
+ * engine calls, no file reads.
  */
 
 // Edits
@@ -641,12 +642,10 @@ export function runText(name: string, notes: string): string {
 
 const OPENING = 'It is how this kind of work was led and staffed before: start from it, and fit it to this problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem. If an agent type or skill is not available here, go without it and say so.'
 
-/** What a copied agent file keeps but Run never registers, in this order: the first two run commands, the third widens permissions. */
-const LEFT_BEHIND = ['hooks', 'mcpServers', 'permissionMode'] as const
 const LEFT_WORDS: Record<(typeof LEFT_BEHIND)[number], string> = { hooks: 'hooks', mcpServers: 'MCP servers', permissionMode: 'permission mode' }
 
-/** "a", "a and b", "a, b and c"; or with "or". */
-const and = (xs: readonly string[], word = 'and') => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} ${word} ${xs[xs.length - 1]}` : (xs[0] ?? ''))
+/** "a", "a and b", "a, b and c". */
+const and = (xs: readonly string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : (xs[0] ?? ''))
 const sentence = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`)
 const times = (n: number) => (n === 1 ? 'once' : `${n} times`)
 /** A map's own entry: a type named like an Object method is still a type. */
@@ -701,12 +700,12 @@ function roleItem(r: SavedRole, h: Here) {
   return `- ${r.label}: ${line}${team ? `\n  ${team}` : ''}`
 }
 
-/** An agent of the lineup, its brief whole under it, each line indented as the item is. */
+/** An agent of the lineup, its brief whole under it, each line indented as the item is; line ends as `\n`. */
 function agentItem(a: SavedAgent, h: Here) {
   const lines = [`- ${a.label}: ${settings(a, h)}`, `  ${toolsLine(a.tools, true)} Skills it used: ${a.skills.join(', ') || 'none'}.`]
   const team = teamLine(a.team, h)
   if (team) lines.push(`  ${team}`)
-  const brief = a.brief.replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
+  const brief = a.brief.replace(/\r\n?/g, '\n').replace(/^(?:[ \t]*\n)+/, '').trimEnd()
   if (brief) lines.push('  Brief:', ...brief.split('\n').map(l => (l.trim() ? `  ${l}` : '')))
   return lines.join('\n')
 }
@@ -739,185 +738,4 @@ export function planText(w: SavedWorkflow, registered: Record<string, string>, l
     if (stages.length) blocks.push(stages.flatMap(stage).join('\n'))
   }
   return blocks.join('\n\n')
-}
-
-// Agent files
-
-/** What a copied agent file carries when Run registers it. `name` is the file's own, which the engine names `redhelm:<name>`. */
-export type AgentSpecIn = { name: string; description: string; prompt: string; tools?: string[]; disallowedTools?: string[]; model?: string;
-  effort?: string; maxTurns?: number; skills?: string[]; initialPrompt?: string; memory?: 'user' | 'project' | 'local'; background?: true; isolation?: 'worktree' | 'remote' }
-
-/** A front matter key as written: the value on its line, and the lines under it (indented, or `- ` items). */
-type Written = { text: string; block: string[] }
-type FrontMatter = { fields: Map<string, Written>; body: string; error?: string }
-
-/** Why a value cannot be carried as written, for the toast after `Couldn't add <name> · `. */
-class Fault {
-  constructor(readonly error: string) {}
-}
-
-/** The keys a spec reads: one of them set twice cannot be carried as written. A key it never reads may repeat. */
-const READ = ['name', 'description', 'tools', 'disallowedTools', 'model', 'effort', 'maxTurns', 'skills', 'initialPrompt', 'memory', 'background', 'isolation']
-const KEY = /^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*))?$/
-const ITEM = /^\s*-(?:\s|$)/
-const COMMENT = /^\s*#/
-
-/**
- * The front matter between the first two `---` lines, read as a YAML subset: `key: value` lines at
- * the left edge, each with the lines under it (indented, or `- ` items) as its block. A block is its
- * key's alone: what it holds is never read as keys. Comment lines are passed over. The first line that
- * is none of these, or a key a spec reads set twice, is the error; reading goes on, so the name is
- * still found. Undefined without an opening `---`.
- */
-function frontMatter(definition: string): FrontMatter | undefined {
-  const lines = definition.replace(/^\uFEFF/, '').split(/\r?\n/)
-  if (lines[0]?.trimEnd() !== '---') return undefined
-  const end = lines.findIndex((l, i) => i > 0 && l.trimEnd() === '---')
-  if (end < 0) return { fields: new Map(), body: '', error: 'The front matter never ends' }
-  const fields = new Map<string, Written>()
-  let error: string | undefined
-  let open: Written | undefined
-  for (let i = 1; i < end; i++) {
-    const l = lines[i]!
-    if (!l.trim() || /^\s/.test(l) || ITEM.test(l)) {
-      if (open) open.block.push(l)
-      else if (l.trim()) error ??= `Front matter line ${i + 1} isn't key: value`
-      continue
-    }
-    if (l.startsWith('#')) continue
-    const m = KEY.exec(l)
-    if (!m) {
-      error ??= `Front matter line ${i + 1} isn't key: value`
-      open = undefined
-      continue
-    }
-    open = { text: m[2]?.trim() ?? '', block: [] }
-    if (!fields.has(m[1]!)) fields.set(m[1]!, open)
-    else if (READ.includes(m[1]!)) error ??= `${m[1]} is set twice`
-  }
-  return { fields, body: lines.slice(end + 1).join('\n').trim(), error }
-}
-
-/** A plain or quoted value: quotes taken off (with their escapes), a ` # comment` after a plain one dropped. */
-function scalar(raw: string): string {
-  const t = raw.trim()
-  const dq = /^"((?:[^"\\]|\\.)*)"/.exec(t)
-  if (dq) {
-    try {
-      return JSON.parse(`"${dq[1]}"`) as string
-    } catch {
-      return dq[1]!
-    }
-  }
-  const sq = /^'((?:[^']|'')*)'/.exec(t)
-  if (sq) return sq[1]!.replace(/''/g, "'")
-  return t.startsWith('#') ? '' : t.replace(/\s+#.*$/, '')
-}
-
-/** The block's lines that say something, trimmed. */
-const said = (e: Written) => e.block.filter(l => l.trim() && !COMMENT.test(l)).map(l => l.trim())
-const blank = (e: Written) => !e.text && !said(e).length
-
-/** A `|` or `>` block's lines, without the indent they share; blank lines at its end dropped. */
-function dedent(block: readonly string[]) {
-  const lines = [...block]
-  while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop()
-  const indent = Math.min(...lines.filter(l => l.trim()).map(l => l.length - l.trimStart().length))
-  return lines.map(l => (l.trim() ? l.slice(indent) : ''))
-}
-
-/** A value as text: a `|` block as its lines; a `>` block, or a plain value over several lines, folded to one; quotes taken off. */
-function textOf(key: string, e: Written): string | Fault {
-  if (/^[|>][-+0-9]*$/.test(scalar(e.text)) && !/^["']/.test(e.text)) {
-    const lines = dedent(e.block)
-    return e.text.startsWith('|') ? lines.join('\n').trimEnd() : lines.map(l => l.trim()).join('\n').replace(/([^\n])\n(?=[^\n])/g, '$1 ').replace(/\n\n/g, '\n').trim()
-  }
-  const rest = said(e)
-  if (/^[[{]/.test(e.text) || (!e.text && rest.some(l => ITEM.test(l)))) return new Fault(`${key} isn't text`)
-  return scalar([e.text, ...rest].filter(Boolean).join(' '))
-}
-
-/** Items split at commas outside brackets, so `Bash(git add:*, git commit:*)` stays one. */
-function items(text: string): string[] {
-  const out: string[] = []
-  let depth = 0
-  let from = 0
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (c === '(' || c === '[') depth++
-    else if ((c === ')' || c === ']') && depth) depth--
-    else if (c === ',' && !depth) {
-      out.push(text.slice(from, i))
-      from = i + 1
-    }
-  }
-  out.push(text.slice(from))
-  return out.map(s => scalar(s)).filter(Boolean)
-}
-
-/** A value as a list: `[a, b]`, `a, b`, or `- a` lines. */
-function listOf(key: string, e: Written): string[] | Fault {
-  const rest = said(e)
-  const fault = new Fault(`${key} isn't a list`)
-  if (!e.text) return rest.every(l => ITEM.test(l)) ? rest.map(l => scalar(l.replace(ITEM, ''))).filter(Boolean) : fault
-  if (rest.some(l => ITEM.test(l)) || e.text.startsWith('{')) return fault
-  const text = [e.text, ...rest].join(' ')
-  if (!text.startsWith('[')) return items(scalar(text))
-  const flow = text.replace(/\s+#.*$/, '')
-  return flow.endsWith(']') ? items(flow.slice(1, -1)) : fault
-}
-
-/** How a carried key's value reads: text, a list, true or false, a number of turns, or one of a few words. */
-type Kind = 'text' | 'list' | 'flag' | 'turns' | readonly string[]
-
-const CARRIED: readonly (readonly [Exclude<keyof AgentSpecIn, 'name' | 'description' | 'prompt'>, Kind])[] = [
-  ['tools', 'list'], ['disallowedTools', 'list'], ['model', 'text'], ['effort', 'text'], ['maxTurns', 'turns'], ['skills', 'list'], ['initialPrompt', 'text'],
-  ['memory', ['user', 'project', 'local']], ['background', 'flag'], ['isolation', ['worktree', 'remote']],
-]
-
-/** A key's value as its kind reads it; `false` and empty text are none. */
-function valueOf(key: string, kind: Kind, e: Written): unknown {
-  if (kind === 'list') return listOf(key, e)
-  const t = textOf(key, e)
-  if (t instanceof Fault || kind === 'text' || !t) return t || undefined
-  if (kind === 'flag') return /^true$/i.test(t) || (/^false$/i.test(t) ? undefined : new Fault(`${key} isn't true or false`))
-  if (kind === 'turns') return /^[1-9]\d*$/.test(t) ? Number(t) : new Fault(`${key} isn't a whole number`)
-  return kind.includes(t) ? t : new Fault(`${key} isn't ${and(kind, 'or')}`)
-}
-
-/** The name a project's agent file gives its type, as Claude Code dispatches it; undefined when it gives none. */
-export function typeName(definition: string): string | undefined {
-  const e = frontMatter(definition)?.fields.get('name')
-  const name = e && textOf('name', e)
-  return typeof name === 'string' && name ? name : undefined
-}
-
-/**
- * A copied agent file as Run registers it: what travels (`description`, the body as `prompt`, `tools`,
- * `disallowedTools`, `model`, `effort`, `maxTurns`, `skills`, `initialPrompt`, `memory`, `background`,
- * `isolation`), and which of `hooks`, `mcpServers` and `permissionMode` the file has, which stay
- * behind. Other keys are passed over. A value it cannot read is an error, never left out: a `tools`
- * dropped would give the agent every tool.
- */
-export function agentSpec(definition: string): { spec: AgentSpecIn; leftBehind: string[] } | { error: string } {
-  const fm = frontMatter(definition)
-  if (!fm) return { error: 'No front matter' }
-  if (fm.error) return { error: fm.error }
-  const read = (key: string, kind: Kind) => {
-    const e = fm.fields.get(key)
-    return e && !blank(e) ? valueOf(key, kind, e) : undefined
-  }
-  const name = read('name', 'text')
-  const description = read('description', 'text')
-  if (name instanceof Fault) return { error: name.error }
-  if (!name) return { error: 'No name' }
-  if (description instanceof Fault) return { error: description.error }
-  if (!description) return { error: 'No description' }
-  const spec: Record<string, unknown> = { name, description, prompt: fm.body }
-  for (const [key, kind] of CARRIED) {
-    const v = read(key, kind)
-    if (v instanceof Fault) return { error: v.error }
-    if (v !== undefined) spec[key] = v
-  }
-  return { spec: spec as AgentSpecIn, leftBehind: LEFT_BEHIND.filter(k => fm.fields.has(k)) }
 }

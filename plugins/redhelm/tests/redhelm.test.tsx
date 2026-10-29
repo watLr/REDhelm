@@ -14,8 +14,9 @@ import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
   READING_CALL, READING_SYSTEM, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
-import { agentSpec, applyOps, checkOps, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, typeName, uniqueName,
+import { applyOps, checkOps, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
   EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
+import { agentSpec, typeName } from '../hooks/agentfile'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -2193,5 +2194,34 @@ describe('the library', () => {
     expect(typeName('---\ndescription: b\n---\n')).toBeUndefined()
     expect(typeName('no frontmatter')).toBeUndefined()
     expect(typeName("---\nname: 'it''s'  # quoted\n---\n")).toBe("it's")
+  })
+
+  test('a block scalar, text after a closing quote or an empty list is never read as tool names', () => {
+    const fm = (...lines: string[]) => `---\nname: a\ndescription: b\n${lines.join('\n')}\n---\nBody`
+    const cases: [string, string][] = [
+      [fm('tools: |', '  Read', '  Grep'), "tools isn't a list"],
+      [fm('tools: >', '  Read, Grep'), "tools isn't a list"],
+      [fm('tools: "Read" Grep'), "tools isn't a list"],
+      [fm('disallowedTools: >', '  Bash'), "disallowedTools isn't a list"], // a denial lost would leave the agent Bash
+      [fm('tools:', '  - "Read" Grep'), "tools isn't a list"],
+      [fm('tools: ["Read" Grep]'), "tools isn't a list"],
+      [fm('model: "opus" sonnet'), "model isn't text"],
+      [fm('tools: []'), 'tools is empty'],
+      [fm('disallowedTools: []'), 'disallowedTools is empty'],
+      [fm('tools: ""'), 'tools is empty'],
+    ]
+    for (const [file, error] of cases) expect([file, agentSpec(file)]).toEqual([file, { error }])
+    expect(agentSpec(fm('tools: "Read"  # just that'))).toMatchObject({ spec: { tools: ['Read'] } }) // a comment after the quote is no text
+  })
+
+  test('CRLF reads as LF, in an agent file and in a brief', () => {
+    const file = '---\nname: store-reviewer\ndescription: Reviews the store\ntools: Read, Grep\nhooks:\n  Stop: echo\ninitialPrompt: |\n  One\n  Two\n---\nYou review.\n\nCarefully.'
+    const crlf = file.replace(/\n/g, '\r\n')
+    expect(agentSpec(file)).toMatchObject({ spec: { initialPrompt: 'One\nTwo', prompt: 'You review.\n\nCarefully.' }, leftBehind: ['hooks'] })
+    expect(agentSpec(crlf)).toEqual(agentSpec(file))
+    expect(typeName(crlf)).toBe('store-reviewer')
+    const plan = planText({ ...emptySaved, stages: [{ agents: [{ ...savedAgent, label: 'Docs', brief: 'One\r\nTwo\r\n\r\nThree\r\n' }] }] }, {}, {})
+    expect(plan).not.toContain('\r')
+    expect(plan.endsWith('\n  Brief:\n  One\n  Two\n\n  Three')).toBe(true)
   })
 })
