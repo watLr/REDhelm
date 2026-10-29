@@ -1,11 +1,13 @@
-import type { Draft, Practice, SavedAgent, SavedRole } from '../types'
+import type { Draft, Lead, Practice, SavedAgent, SavedRole, SavedType, SavedWorkflow } from '../types'
+import { hash } from './labels'
 import { answerOf, compact, head, LABEL, NAME, PRACTICE, PURPOSE, ROLE } from './workflows'
 
 /**
  * What happens to a draft after Save read it. An edit in your words goes to the model, which answers
  * with operations, never a rewritten workflow, so a brief is never shortened or mangled behind your
  * back. Every op is checked before any applies; one bad op rejects the edit, with a reason in one
- * line. Pure: a draft and ops in, a draft out.
+ * line. Then the saved file and the library, the plan Claude gets when you press Run, and a
+ * project's agent file read so it can travel. Pure: no engine calls, no file reads.
  */
 
 // Edits
@@ -85,7 +87,7 @@ const setupOf = (x: SavedAgent | SavedRole) => {
 const line = (parts: unknown[]) => parts.filter(Boolean).join(' · ')
 
 /** A list under its title, `none` when empty. */
-const listed = (title: string, rows: readonly string[]) => (rows.length ? `${title}:\n${rows.join('\n')}` : `${title}: none`)
+const titled = (title: string, rows: readonly string[]) => (rows.length ? `${title}:\n${rows.join('\n')}` : `${title}: none`)
 
 /**
  * What the edit call is given: the name, purpose and form; the lead skills, practices and shared parts;
@@ -104,10 +106,10 @@ export function editRequest(d: Draft, ask: string): { system: string; prompt: st
     text('Purpose', d.purpose),
     `Form: ${d.form}`,
     `Lead skills: ${d.lead.skills.join(', ') || 'none'}`,
-    listed('Practices', d.lead.playbook.map((p, k) => numbered(k, `when ${JSON.stringify(p.when)}, do ${JSON.stringify(p.do)}`))),
-    listed('Shared brief parts', d.lead.briefParts.map((p, k) => `${k + 1}. [${k}]${quote(p)}`)),
-    listed("Lineup, the items while the form is lineup. A stage's agents start together", stages),
-    listed('Roles, the items while the form is roles', d.roles.map((r, k) =>
+    titled('Practices', d.lead.playbook.map((p, k) => numbered(k, `when ${JSON.stringify(p.when)}, do ${JSON.stringify(p.do)}`))),
+    titled('Shared brief parts', d.lead.briefParts.map((p, k) => `${k + 1}. [${k}]${quote(p)}`)),
+    titled("Lineup, the items while the form is lineup. A stage's agents start together", stages),
+    titled('Roles, the items while the form is roles', d.roles.map((r, k) =>
       numbered(k, line([...setupOf(r), `ran ${r.ran} time${r.ran === 1 ? '' : 's'}`, `role ${JSON.stringify(r.role)}`])))),
   ]
   return { system: EDIT_SYSTEM, prompt: `${rows.join('\n')}\n\nThe change asked for: ${ask.trim()}` }
@@ -489,4 +491,426 @@ export function applyOps(d: Draft, ops: readonly Op[]): Draft {
     folded: d.folded.filter(f => !gone(f.label)),
     evidence: w.practices.map(e => e.evidence),
   }
+}
+
+// The saved file
+
+/** How long an id may be before Save makes it unique among the files. */
+const SLUG = 48
+
+/**
+ * A name's file id: its ASCII words (accents and apostrophes dropped), lowercased and joined with '-',
+ * cut at a word to 48 characters. A name with no ASCII word gets `workflow-<hash of the name>`.
+ */
+export function slug(name: string): string {
+  const words = name.normalize('NFKD').replace(/[\u0300-\u036f'’]/g, '').toLowerCase().match(/[a-z0-9]+/g) ?? []
+  let out = words[0]?.slice(0, SLUG) ?? ''
+  for (const w of words.slice(1)) {
+    if (out.length + 1 + w.length > SLUG) break
+    out += `-${w}`
+  }
+  return out || `workflow-${hash(name)}`
+}
+
+/** The name when no saved workflow has it; else the first of "<name> 2", "<name> 3"… none has. */
+export function uniqueName(name: string, taken: readonly string[]): string {
+  if (!taken.includes(name)) return name
+  let k = 2
+  while (taken.includes(`${name} ${k}`)) k++
+  return `${name} ${k}`
+}
+
+/** A project's key: its root is only ever kept hashed. */
+export const projectKey = (root: string) => hash(root)
+
+// Copies hold only the saved fields, each array and object new; a null a hand-edited file wrote reads as absent.
+const copyLead = (l: Lead): Lead => compact({ skills: [...l.skills], playbook: l.playbook.map(p => ({ when: p.when, do: p.do })), briefParts: [...l.briefParts],
+  model: l.model ?? undefined, effort: l.effort ?? undefined })
+const copyRole = (r: SavedRole): SavedRole => compact({ label: r.label, role: r.role, type: r.type, model: r.model ?? undefined, effort: r.effort ?? undefined,
+  isolation: r.isolation ?? undefined, background: r.background, teammate: r.teammate, tools: { ...r.tools }, skills: [...r.skills], ran: r.ran, team: r.team?.map(copyRole) })
+const copyAgent = (a: SavedAgent): SavedAgent => compact({ label: a.label, description: a.description, brief: a.brief, type: a.type, model: a.model ?? undefined,
+  effort: a.effort ?? undefined, name: a.name ?? undefined, background: a.background, teammate: a.teammate, isolation: a.isolation ?? undefined,
+  tools: { ...a.tools }, skills: [...a.skills], team: a.team?.map(copyRole) })
+const copyType = (t: SavedType): SavedType => ({ name: t.name, definition: t.definition })
+
+/** The types an agent or role runs as, its own team's included. */
+const typesOf = (x: SavedAgent | SavedRole) => [x.type, ...(x.team ?? []).map(r => r.type)]
+
+/**
+ * The draft as its file holds it: the chosen form only (the other left empty, a stage left empty
+ * dropped), the copied types that form still runs as, once each, and nothing that is the sheet's
+ * (repeats folded, types not copied, evidence, the reading's state, Earlier). Every object in it is
+ * new, so the draft and the file share nothing.
+ */
+export function toSaved(d: Draft, at: number, id: string): SavedWorkflow {
+  const roles = d.form === 'roles' ? d.roles.map(copyRole) : []
+  const stages = d.form === 'lineup' ? d.stages.filter(s => s.agents.length).map(s => ({ agents: s.agents.map(copyAgent) })) : []
+  const used = new Set([...roles, ...stages.flatMap(s => s.agents)].flatMap(typesOf))
+  const types = d.types.filter((t, k) => used.has(t.name) && d.types.findIndex(u => u.name === t.name) === k).map(copyType)
+  return { version: 1, id, name: d.name, purpose: d.purpose, savedAt: at, project: d.project, projectKey: d.projectKey, lead: copyLead(d.lead), form: d.form, roles, stages, types }
+}
+
+const isText = (v: unknown): v is string => typeof v === 'string'
+const isName = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
+const isTexts = (v: unknown): v is string[] => Array.isArray(v) && v.every(isText)
+/** A count: a whole number, 0 or more. */
+const isCount = isIndex
+/** Absent, null, or of the shape `ok` checks. */
+const optional = (v: unknown, ok: (v: unknown) => boolean) => v === undefined || v === null || ok(v)
+const isCounts = (v: unknown) => !!fieldsOf(v) && Object.values(fieldsOf(v)!).every(isCount)
+const isIsolation = (v: unknown) => v === 'worktree' || v === 'remote'
+/** An id names a file in the library folder, never a path out of it. */
+const isId = (v: unknown): v is string => isName(v) && !/[/\\]/.test(v) && v !== '.' && v !== '..'
+
+/** What agents and roles share: the type and settings they ran with, the tools they used, the skills they loaded. */
+const isSetup = (o: Fields) => isName(o.type) && optional(o.model, isText) && optional(o.effort, isText) && optional(o.isolation, isIsolation)
+  && typeof o.background === 'boolean' && typeof o.teammate === 'boolean' && isCounts(o.tools) && isTexts(o.skills)
+
+/** A role, with its own team one level down at most, as Save reads teams. */
+function isRole(v: unknown, top: boolean): boolean {
+  const o = fieldsOf(v)
+  return !!o && isText(o.label) && isText(o.role) && isSetup(o) && isCount(o.ran) && (top ? optional(o.team, isTeam) : optional(o.team, () => false))
+}
+const isTeam = (v: unknown) => Array.isArray(v) && v.every(r => isRole(r, false))
+
+function isAgent(v: unknown) {
+  const o = fieldsOf(v)
+  return !!o && isText(o.label) && isText(o.description) && isText(o.brief) && isSetup(o) && optional(o.name, isText) && optional(o.team, isTeam)
+}
+
+function isLead(v: unknown): v is Lead {
+  const o = fieldsOf(v)
+  const isPractice = (p: unknown) => !!fieldsOf(p) && isText(fieldsOf(p)!.when) && isText(fieldsOf(p)!.do)
+  return !!o && isTexts(o.skills) && Array.isArray(o.playbook) && o.playbook.every(isPractice) && isTexts(o.briefParts) && optional(o.model, isText) && optional(o.effort, isText)
+}
+
+const isStage = (v: unknown) => !!fieldsOf(v) && Array.isArray(fieldsOf(v)!.agents) && (fieldsOf(v)!.agents as unknown[]).every(isAgent)
+const isType = (v: unknown) => !!fieldsOf(v) && isName(fieldsOf(v)!.name) && isText(fieldsOf(v)!.definition)
+
+/**
+ * A saved file, read: version 1 with every field of its shape, as a new object holding those fields
+ * only. Undefined for anything else: text that is not JSON, a newer version, a field missing or of the
+ * wrong kind, an id that is a path, a team more than one level down.
+ */
+export function parseSaved(text: string): SavedWorkflow | undefined {
+  let v: unknown
+  try {
+    v = JSON.parse(text.replace(/^\uFEFF/, ''))
+  } catch {
+    return undefined
+  }
+  const o = fieldsOf(v)
+  if (!o || o.version !== 1 || !isId(o.id) || !isName(o.name) || !isText(o.purpose) || typeof o.savedAt !== 'number' || !Number.isFinite(o.savedAt)
+    || !isText(o.project) || !isText(o.projectKey) || !isLead(o.lead) || (o.form !== 'roles' && o.form !== 'lineup')
+    || !Array.isArray(o.roles) || !o.roles.every(r => isRole(r, true)) || !Array.isArray(o.stages) || !o.stages.every(isStage)
+    || !Array.isArray(o.types) || !o.types.every(isType)) return undefined
+  return {
+    version: 1, id: o.id, name: o.name, purpose: o.purpose, savedAt: o.savedAt, project: o.project, projectKey: o.projectKey, lead: copyLead(o.lead), form: o.form,
+    roles: (o.roles as SavedRole[]).map(copyRole), stages: (o.stages as { agents: SavedAgent[] }[]).map(s => ({ agents: s.agents.map(copyAgent) })),
+    types: (o.types as SavedType[]).map(copyType),
+  }
+}
+
+/**
+ * The library as Load lists it: this project's workflows first, then newest first, then by id. A
+ * workflow's id is its file's name, so Run and Delete reach the file it came from. A blank file (a
+ * deleted one) and a name that is not `.json` are passed over; a file that does not read is counted.
+ */
+export function listed(files: readonly { name: string; text: string }[], key: string): { workflows: SavedWorkflow[]; unreadable: number } {
+  const workflows: SavedWorkflow[] = []
+  let unreadable = 0
+  for (const f of files) {
+    const id = /^(.+)\.json$/.exec(f.name)?.[1]
+    if (!id || !f.text.trim()) continue
+    const w = parseSaved(f.text)
+    if (w) workflows.push({ ...w, id })
+    else unreadable++
+  }
+  const theirs = (w: SavedWorkflow) => (w.projectKey === key ? 0 : 1)
+  workflows.sort((a, b) => theirs(a) - theirs(b) || b.savedAt - a.savedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return { workflows, unreadable }
+}
+
+// Run
+
+/** What your prompt becomes when you run a workflow: the ask, and your notes for this run when you wrote any. */
+export function runText(name: string, notes: string): string {
+  const n = notes.trim()
+  return `Run my saved REDhelm workflow "${name}".${n ? ` My notes for this run: ${n}` : ''}`
+}
+
+const OPENING = 'It is how this kind of work was led and staffed before: start from it, and fit it to this problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem. If an agent type or skill is not available here, go without it and say so.'
+
+/** What a copied agent file keeps but Run never registers, in this order: the first two run commands, the third widens permissions. */
+const LEFT_BEHIND = ['hooks', 'mcpServers', 'permissionMode'] as const
+const LEFT_WORDS: Record<(typeof LEFT_BEHIND)[number], string> = { hooks: 'hooks', mcpServers: 'MCP servers', permissionMode: 'permission mode' }
+
+/** "a", "a and b", "a, b and c"; or with "or". */
+const and = (xs: readonly string[], word = 'and') => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} ${word} ${xs[xs.length - 1]}` : (xs[0] ?? ''))
+const sentence = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`)
+const times = (n: number) => (n === 1 ? 'once' : `${n} times`)
+/** A map's own entry: a type named like an Object method is still a type. */
+const own = <T>(o: Readonly<Record<string, T>>, k: string) => (Object.hasOwn(o, k) ? o[k] : undefined)
+
+type Here = { registered: Record<string, string>; leftBehind: Record<string, string[]> }
+
+/** The type an agent or role runs as here, and what the plan says of it: that its copy could not be added, or what of its file stayed behind. */
+function typeHere(type: string, h: Here): { as: string; note?: string } {
+  const as = own(h.registered, type) ?? type
+  if (as === 'general-purpose' && type !== 'general-purpose') return { as, note: `${type} could not be added here` }
+  const left = own(h.leftBehind, type) ?? []
+  const words = LEFT_BEHIND.filter(f => left.includes(f)).map(f => LEFT_WORDS[f])
+  return { as, note: words.length ? `its ${and(words)} stayed behind` : undefined }
+}
+
+/** The type and the settings it ran with, as the Agent tool takes them. */
+function settings(x: SavedAgent | SavedRole, h: Here) {
+  const t = typeHere(x.type, h)
+  const name = 'name' in x ? x.name : undefined
+  return [`subagent_type ${t.as}${t.note ? ` (${t.note})` : ''}`, name && `name ${name}`, x.model && `model ${x.model}`, x.effort && `effort ${x.effort}`,
+    x.isolation && `isolation ${x.isolation}`, x.background && 'background', x.teammate && 'teammate'].filter(Boolean).join(', ')
+}
+
+/** The tools it used, most used first. A tool an edit added never ran, so it is left out. */
+const toolsUsed = (tools: Readonly<Record<string, number>>) => Object.entries(tools).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
+
+/** The roles its own agents filled, as one line; undefined when it started none. */
+function teamLine(team: readonly SavedRole[] | undefined, h: Here) {
+  if (!team?.length) return undefined
+  const one = (r: SavedRole) => {
+    const t = typeHere(r.type, h)
+    const parts = [t.as, r.model, r.effort && `effort ${r.effort}`, r.isolation && `isolation ${r.isolation}`, r.ran > 0 && `ran ${times(r.ran)}`].filter(Boolean)
+    return `${r.label} (${parts.join(', ')}${t.note ? `; ${t.note}` : ''})`
+  }
+  return `It started its own team: ${team.map(one).join(', ')}. Ask it to staff its work that way.`
+}
+
+/** A role that never ran (an edit added it) leaves out how many times it ran. */
+function roleItem(r: SavedRole, h: Here) {
+  const line = [r.role.trim() && sentence(r.role.trim()), `${settings(r, h)}.`, `Tools it used: ${toolsUsed(r.tools).map(([t]) => t).join(', ') || 'none'}.`,
+    `Skills: ${r.skills.join(', ') || 'none'}.`, r.ran > 0 && `Ran ${times(r.ran)}.`].filter(Boolean).join(' ')
+  const team = teamLine(r.team, h)
+  return `- ${r.label}: ${line}${team ? `\n  ${team}` : ''}`
+}
+
+/** An agent of the lineup, its brief whole under it, each line indented as the item is. */
+function agentItem(a: SavedAgent, h: Here) {
+  const tools = toolsUsed(a.tools).map(([t, n]) => `${t} ${n}`)
+  const lines = [`- ${a.label}: ${settings(a, h)}`, `  Tools it used: ${tools.join(', ') || 'none'}. Skills it used: ${a.skills.join(', ') || 'none'}.`]
+  const team = teamLine(a.team, h)
+  if (team) lines.push(`  ${team}`)
+  const brief = a.brief.replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
+  if (brief) lines.push('  Brief:', ...brief.split('\n').map(l => (l.trim() ? `  ${l}` : '')))
+  return lines.join('\n')
+}
+
+/** "When the work splits cleanly, start implementers together." */
+const practiceLine = (p: Practice) => sentence([p.when.trim().replace(/[\s,;:.]+$/, ''), p.do.trim()].filter(Boolean).join(', '))
+
+/**
+ * The plan Claude gets in the prompt's context when you run a workflow (spec §8): the opening, then
+ * the lead skills, the playbook, the shared brief parts (Roles), and the roles or the stages, each only
+ * when it has something in it. A type is named as it runs here: `registered` maps a saved type to
+ * `redhelm:<name>`, or to `general-purpose` when its copy could not be added, which the plan says;
+ * `leftBehind` names what of a copied type's file stayed behind.
+ */
+export function planText(w: SavedWorkflow, registered: Record<string, string>, leftBehind: Record<string, string[]>): string {
+  const h = { registered, leftBehind }
+  const purpose = w.purpose.trim()
+  const blocks = [`Saved REDhelm workflow "${w.name}"${purpose ? `: ${sentence(purpose)}` : '.'}\n${OPENING}`]
+  const skills = w.lead.skills
+  if (skills.length) blocks.push(`Lead: use the ${and(skills)} skill${skills.length > 1 ? 's' : ''} to run this.`)
+  const playbook = w.lead.playbook.filter(p => p.when.trim() || p.do.trim())
+  if (playbook.length) blocks.push(['How the lead worked last time. Use the practices that fit this problem:', ...playbook.map((p, k) => `${k + 1}. ${practiceLine(p)}`)].join('\n'))
+  if (w.form === 'roles') {
+    const parts = w.lead.briefParts.filter(p => p.trim())
+    if (parts.length) blocks.push(`Every agent's brief should include:\n${parts.join('\n\n')}`)
+    if (w.roles.length) blocks.push(['Staff it with these roles, as many of each as the work needs:', ...w.roles.map(r => roleItem(r, h))].join('\n'))
+  } else {
+    const stages = w.stages.filter(s => s.agents.length)
+    const stage = (s: { agents: SavedAgent[] }, k: number) => [`Stage ${k + 1}, ${k ? `after stage ${k} finishes` : 'start together'}:`, ...s.agents.map(a => agentItem(a, h))]
+    if (stages.length) blocks.push(stages.flatMap(stage).join('\n'))
+  }
+  return blocks.join('\n\n')
+}
+
+// Agent files
+
+/** What a copied agent file carries when Run registers it. `name` is the file's own, which the engine names `redhelm:<name>`. */
+export type AgentSpecIn = { name: string; description: string; prompt: string; tools?: string[]; disallowedTools?: string[]; model?: string;
+  effort?: string; maxTurns?: number; skills?: string[]; initialPrompt?: string; memory?: 'user' | 'project' | 'local'; background?: true; isolation?: 'worktree' | 'remote' }
+
+/** A front matter key as written: the value on its line, and the lines under it (indented, or `- ` items). */
+type Written = { text: string; block: string[] }
+type FrontMatter = { fields: Map<string, Written>; body: string; error?: string }
+
+/** Why a value cannot be carried as written, for the toast after `Couldn't add <name> · `. */
+class Fault {
+  constructor(readonly error: string) {}
+}
+
+/** The keys a spec reads: one of them set twice cannot be carried as written. A key it never reads may repeat. */
+const READ = ['name', 'description', 'tools', 'disallowedTools', 'model', 'effort', 'maxTurns', 'skills', 'initialPrompt', 'memory', 'background', 'isolation']
+const KEY = /^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*))?$/
+const ITEM = /^\s*-(?:\s|$)/
+const COMMENT = /^\s*#/
+
+/**
+ * The front matter between the first two `---` lines, read as a YAML subset: `key: value` lines at
+ * the left edge, each with the lines under it (indented, or `- ` items) as its block. A block is its
+ * key's alone: what it holds is never read as keys. Comment lines are passed over. The first line that
+ * is none of these, or a key a spec reads set twice, is the error; reading goes on, so the name is
+ * still found. Undefined without an opening `---`.
+ */
+function frontMatter(definition: string): FrontMatter | undefined {
+  const lines = definition.replace(/^\uFEFF/, '').split(/\r?\n/)
+  if (lines[0]?.trimEnd() !== '---') return undefined
+  const end = lines.findIndex((l, i) => i > 0 && l.trimEnd() === '---')
+  if (end < 0) return { fields: new Map(), body: '', error: 'The front matter never ends' }
+  const fields = new Map<string, Written>()
+  let error: string | undefined
+  let open: Written | undefined
+  for (let i = 1; i < end; i++) {
+    const l = lines[i]!
+    if (!l.trim() || /^\s/.test(l) || ITEM.test(l)) {
+      if (open) open.block.push(l)
+      else if (l.trim()) error ??= `Front matter line ${i + 1} isn't key: value`
+      continue
+    }
+    if (l.startsWith('#')) continue
+    const m = KEY.exec(l)
+    if (!m) {
+      error ??= `Front matter line ${i + 1} isn't key: value`
+      open = undefined
+      continue
+    }
+    open = { text: m[2]?.trim() ?? '', block: [] }
+    if (!fields.has(m[1]!)) fields.set(m[1]!, open)
+    else if (READ.includes(m[1]!)) error ??= `${m[1]} is set twice`
+  }
+  return { fields, body: lines.slice(end + 1).join('\n').trim(), error }
+}
+
+/** A plain or quoted value: quotes taken off (with their escapes), a ` # comment` after a plain one dropped. */
+function scalar(raw: string): string {
+  const t = raw.trim()
+  const dq = /^"((?:[^"\\]|\\.)*)"/.exec(t)
+  if (dq) {
+    try {
+      return JSON.parse(`"${dq[1]}"`) as string
+    } catch {
+      return dq[1]!
+    }
+  }
+  const sq = /^'((?:[^']|'')*)'/.exec(t)
+  if (sq) return sq[1]!.replace(/''/g, "'")
+  return t.startsWith('#') ? '' : t.replace(/\s+#.*$/, '')
+}
+
+/** The block's lines that say something, trimmed. */
+const said = (e: Written) => e.block.filter(l => l.trim() && !COMMENT.test(l)).map(l => l.trim())
+const blank = (e: Written) => !e.text && !said(e).length
+
+/** A `|` or `>` block's lines, without the indent they share; blank lines at its end dropped. */
+function dedent(block: readonly string[]) {
+  const lines = [...block]
+  while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop()
+  const indent = Math.min(...lines.filter(l => l.trim()).map(l => l.length - l.trimStart().length))
+  return lines.map(l => (l.trim() ? l.slice(indent) : ''))
+}
+
+/** A value as text: a `|` block as its lines; a `>` block, or a plain value over several lines, folded to one; quotes taken off. */
+function textOf(key: string, e: Written): string | Fault {
+  if (/^[|>][-+0-9]*$/.test(scalar(e.text)) && !/^["']/.test(e.text)) {
+    const lines = dedent(e.block)
+    return e.text.startsWith('|') ? lines.join('\n').trimEnd() : lines.map(l => l.trim()).join('\n').replace(/([^\n])\n(?=[^\n])/g, '$1 ').replace(/\n\n/g, '\n').trim()
+  }
+  const rest = said(e)
+  if (/^[[{]/.test(e.text) || (!e.text && rest.some(l => ITEM.test(l)))) return new Fault(`${key} isn't text`)
+  return scalar([e.text, ...rest].filter(Boolean).join(' '))
+}
+
+/** Items split at commas outside brackets, so `Bash(git add:*, git commit:*)` stays one. */
+function items(text: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let from = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '(' || c === '[') depth++
+    else if ((c === ')' || c === ']') && depth) depth--
+    else if (c === ',' && !depth) {
+      out.push(text.slice(from, i))
+      from = i + 1
+    }
+  }
+  out.push(text.slice(from))
+  return out.map(s => scalar(s)).filter(Boolean)
+}
+
+/** A value as a list: `[a, b]`, `a, b`, or `- a` lines. */
+function listOf(key: string, e: Written): string[] | Fault {
+  const rest = said(e)
+  const fault = new Fault(`${key} isn't a list`)
+  if (!e.text) return rest.every(l => ITEM.test(l)) ? rest.map(l => scalar(l.replace(ITEM, ''))).filter(Boolean) : fault
+  if (rest.some(l => ITEM.test(l)) || e.text.startsWith('{')) return fault
+  const text = [e.text, ...rest].join(' ')
+  if (!text.startsWith('[')) return items(scalar(text))
+  const flow = text.replace(/\s+#.*$/, '')
+  return flow.endsWith(']') ? items(flow.slice(1, -1)) : fault
+}
+
+/** How a carried key's value reads: text, a list, true or false, a number of turns, or one of a few words. */
+type Kind = 'text' | 'list' | 'flag' | 'turns' | readonly string[]
+
+const CARRIED: readonly (readonly [Exclude<keyof AgentSpecIn, 'name' | 'description' | 'prompt'>, Kind])[] = [
+  ['tools', 'list'], ['disallowedTools', 'list'], ['model', 'text'], ['effort', 'text'], ['maxTurns', 'turns'], ['skills', 'list'], ['initialPrompt', 'text'],
+  ['memory', ['user', 'project', 'local']], ['background', 'flag'], ['isolation', ['worktree', 'remote']],
+]
+
+/** A key's value as its kind reads it; `false` and empty text are none. */
+function valueOf(key: string, kind: Kind, e: Written): unknown {
+  if (kind === 'list') return listOf(key, e)
+  const t = textOf(key, e)
+  if (t instanceof Fault || kind === 'text' || !t) return t || undefined
+  if (kind === 'flag') return /^true$/i.test(t) || (/^false$/i.test(t) ? undefined : new Fault(`${key} isn't true or false`))
+  if (kind === 'turns') return /^[1-9]\d*$/.test(t) ? Number(t) : new Fault(`${key} isn't a whole number`)
+  return kind.includes(t) ? t : new Fault(`${key} isn't ${and(kind, 'or')}`)
+}
+
+/** The name a project's agent file gives its type, as Claude Code dispatches it; undefined when it gives none. */
+export function typeName(definition: string): string | undefined {
+  const e = frontMatter(definition)?.fields.get('name')
+  const name = e && textOf('name', e)
+  return typeof name === 'string' && name ? name : undefined
+}
+
+/**
+ * A copied agent file as Run registers it: what travels (`description`, the body as `prompt`, `tools`,
+ * `disallowedTools`, `model`, `effort`, `maxTurns`, `skills`, `initialPrompt`, `memory`, `background`,
+ * `isolation`), and which of `hooks`, `mcpServers` and `permissionMode` the file has, which stay
+ * behind. Other keys are passed over. A value it cannot read is an error, never left out: a `tools`
+ * dropped would give the agent every tool.
+ */
+export function agentSpec(definition: string): { spec: AgentSpecIn; leftBehind: string[] } | { error: string } {
+  const fm = frontMatter(definition)
+  if (!fm) return { error: 'No front matter' }
+  if (fm.error) return { error: fm.error }
+  const read = (key: string, kind: Kind) => {
+    const e = fm.fields.get(key)
+    return e && !blank(e) ? valueOf(key, kind, e) : undefined
+  }
+  const name = read('name', 'text')
+  const description = read('description', 'text')
+  if (name instanceof Fault) return { error: name.error }
+  if (!name) return { error: 'No name' }
+  if (description instanceof Fault) return { error: description.error }
+  if (!description) return { error: 'No description' }
+  const spec: Record<string, unknown> = { name, description, prompt: fm.body }
+  for (const [key, kind] of CARRIED) {
+    const v = read(key, kind)
+    if (v instanceof Fault) return { error: v.error }
+    if (v !== undefined) spec[key] = v
+  }
+  return { spec: spec as AgentSpecIn, leftBehind: LEFT_BEHIND.filter(k => fm.fields.has(k)) }
 }

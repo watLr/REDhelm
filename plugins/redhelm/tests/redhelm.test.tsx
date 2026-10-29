@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import type { Agent } from '../types'
+import type { Agent, Draft, SavedAgent, SavedRole, SavedWorkflow } from '../types'
 
 /** The test runtime has timers; the hooks environment's declarations leave them out. */
 declare const setTimeout: (fn: () => void, ms: number) => unknown
@@ -14,7 +14,8 @@ import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
   READING_CALL, READING_SYSTEM, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
-import { applyOps, checkOps, editRequest, parseEdit, EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
+import { agentSpec, applyOps, checkOps, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, typeName, uniqueName,
+  EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -1898,5 +1899,287 @@ describe('editing a draft', () => {
     for (const t of [undefined, '', '[{"op": "rename", "name": "X"}]', '"ops"', '{}', '{"ops": [1]}', '{"ops": [null]}', '{"ops": "rename"}', '{"cannot": ""}', '{"cannot": 3}', '{"ops": [{"op": "rename"']) {
       expect([t, parseEdit(t)]).toEqual([t, undefined])
     }
+  })
+})
+
+/** The least a saved workflow, a role and a lineup agent need. */
+const emptySaved: SavedWorkflow = { version: 1, id: 'empty', name: 'Empty', purpose: '', savedAt: 0, project: 'notes-app', projectKey: 'k0',
+  lead: { skills: [], playbook: [], briefParts: [] }, form: 'lineup', roles: [], stages: [], types: [] }
+const role: SavedRole = { label: 'Writer', role: '', type: 'general-purpose', background: false, teammate: false, tools: {}, skills: [], ran: 1 }
+const savedAgent: SavedAgent = { label: 'Agent', description: '', brief: '', type: 'general-purpose', background: false, teammate: false, tools: {}, skills: [] }
+
+describe('the library', () => {
+  test('slugs', () => {
+    expect(slug('Tests, then a review')).toBe('tests-then-a-review')
+    expect(slug('Тесты ✓')).toMatch(/^workflow-[0-9a-z]+$/)
+    expect(uniqueName('Tests', ['Tests', 'Tests 2'])).toBe('Tests 3')
+  })
+  test('a saved file keeps only the chosen form and reads back', () => {
+    const d = { ...readWorkflow({ msgs: [you('go'), lead(call('a1'))], records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p/notes-app', lead: {} })!, name: 'Docs' }
+    const w = toSaved({ ...d, form: 'roles' }, 5, 'docs')
+    expect(w.projectKey).toBe(projectKey('/p/notes-app'))
+    expect(w).toMatchObject({ version: 1, id: 'docs', savedAt: 5, stages: [] })
+    expect('folded' in w || 'evidence' in w).toBe(false)
+    expect(parseSaved(JSON.stringify(w))).toEqual(w)
+    expect(parseSaved(JSON.stringify({ ...w, version: 2 }))).toBeUndefined()
+  })
+  test("this project's workflows list first, then newest; bad files are counted, empty ones skipped", () => {
+    const mk = (id: string, savedAt: number, key: string) => JSON.stringify({ ...emptySaved, id, name: id, savedAt, projectKey: key })
+    const r = listed([{ name: 'a.json', text: mk('a', 1, 'k') }, { name: 'b.json', text: mk('b', 9, 'other') }, { name: 'c.json', text: mk('c', 3, 'k') },
+      { name: 'bad.json', text: '{' }, { name: 'gone.json', text: '' }], 'k')
+    expect(r.workflows.map(w => w.id)).toEqual(['c', 'a', 'b'])
+    expect(r.unreadable).toBe(1)
+  })
+  test('the run text and each plan shape', () => {
+    expect(runText('Build: phase two', '')).toBe('Run my saved REDhelm workflow "Build: phase two".')
+    expect(runText('Docs', 'only src/store.js')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only src/store.js')
+    const roles = planText({ ...emptySaved, name: 'Build', form: 'roles', lead: { skills: ['redmanager'], playbook: [], briefParts: ['STATUS: DONE'] },
+      roles: [{ ...role, label: 'Implementer', type: 'store-builder', ran: 7 }] }, { 'store-builder': 'redhelm:store-builder' }, {})
+    expect(roles).toContain('Lead: use the redmanager skill to run this.')
+    expect(roles).toContain('Every agent\'s brief should include:\nSTATUS: DONE')
+    expect(roles).toContain('subagent_type redhelm:store-builder')
+    expect(roles).not.toContain('How the lead worked last time')
+    const lineup = planText({ ...emptySaved, form: 'lineup', stages: [{ agents: [{ ...savedAgent, label: 'Docs', brief: 'Write the docs' }] }] }, {}, {})
+    expect(lineup).toContain('Stage 1, start together:')
+    expect(lineup).toContain('Write the docs')
+  })
+  test('an agent file carries its settings and leaves hooks, MCP servers and permission mode behind', () => {
+    const file = '---\nname: store-reviewer\ndescription: Reviews the store\ntools: Read, Grep\nmodel: sonnet\npermissionMode: bypassPermissions\nhooks:\n  Stop: echo\nmcpServers: [notes]\n---\nYou review the store.'
+    expect(typeName(file)).toBe('store-reviewer')
+    expect(agentSpec(file)).toEqual({ spec: { name: 'store-reviewer', description: 'Reviews the store', prompt: 'You review the store.', tools: ['Read', 'Grep'], model: 'sonnet' },
+      leftBehind: ['hooks', 'mcpServers', 'permissionMode'] })
+    expect(agentSpec('no frontmatter')).toEqual({ error: 'No front matter' })
+  })
+
+  // Beyond the plan's tests: the rules it states but does not pin.
+  test('a slug is ASCII words, cut at a word to 48 characters; a name with none gets its hash', () => {
+    expect(slug('  Build: phase two!  ')).toBe('build-phase-two')
+    expect(slug('Café crème')).toBe('cafe-creme')
+    expect(slug("Don't panic")).toBe('dont-panic')
+    expect(slug('Ｔｅｓｔｓ')).toBe('tests')
+    expect(slug('word '.repeat(20))).toBe(Array(9).fill('word').join('-')) // 44 characters; a tenth word would pass 48
+    expect(slug('a'.repeat(60))).toBe('a'.repeat(48))
+    for (const none of ['', '---', 'Тесты ✓']) expect(slug(none)).toBe(`workflow-${hash(none)}`)
+    expect(slug('Тесты ✓')).not.toBe(slug('Другое'))
+    expect(uniqueName('Tests', [])).toBe('Tests')
+    expect(uniqueName('Tests', ['Tests 2'])).toBe('Tests')
+    expect(uniqueName('Tests', ['Tests', 'Tests 3'])).toBe('Tests 2')
+  })
+
+  /** A draft with both forms, a team, copied types and every transient field set. */
+  const draft = (): Draft => {
+    const d = readWorkflow({ msgs: [you('go'), lead(call('a1'))], records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p/notes-app', lead: { model: 'opus' } })!
+    const def = (name: string, body = 'You work.') => ({ name, definition: `---\nname: ${name}\ndescription: Works\n---\n${body}` })
+    return { ...d, name: 'Docs', purpose: 'Docs, then a review',
+      lead: { ...d.lead, skills: ['redmanager'], playbook: [{ when: 'When parts are independent', do: 'start them together' }], briefParts: ['Never push.'] },
+      stages: [{ agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', tools: { Read: 2 }, skills: ['tdd'], team: [{ ...role, type: 'store-writer' }] }] }, { agents: [] }],
+      roles: [{ ...role, type: 'store-tester', tools: { Bash: 1 } }],
+      types: [def('store-reviewer'), def('store-tester'), def('store-writer'), def('store-reviewer', 'A second copy.'), def('unused')],
+      folded: [{ label: 'Review', times: 2 }], notCopied: ['store-linter'], evidence: [['#1 you: "go"']], read: 'done', back: 0, more: false }
+  }
+
+  test("a saved file holds the saved fields only, the types its form still uses, and nothing it shares with the draft", () => {
+    const d = draft()
+    const w = toSaved(d, 7, 'docs')
+    expect(Object.keys(w).sort()).toEqual(['form', 'id', 'lead', 'name', 'project', 'projectKey', 'purpose', 'roles', 'savedAt', 'stages', 'types', 'version'])
+    expect(w).toMatchObject({ project: 'notes-app', form: 'lineup', roles: [], lead: { model: 'opus' } })
+    expect(w.stages).toHaveLength(1) // the empty stage is dropped
+    expect(w.types.map(t => [t.name, t.definition.endsWith('You work.')])).toEqual([['store-reviewer', true], ['store-writer', true]]) // a team's type is used too; once each
+    expect(toSaved({ ...d, form: 'roles' }, 7, 'docs').types.map(t => t.name)).toEqual(['store-tester'])
+    expect(toSaved({ ...d, stages: [] }, 7, 'docs').types).toEqual([]) // an edit removed the last agent of each type
+    const objects = (o: unknown, into = new Set<unknown>()) => {
+      if (o && typeof o === 'object') { into.add(o); Object.values(o).forEach(v => objects(v, into)) }
+      return into
+    }
+    for (const form of ['roles', 'lineup'] as const) {
+      const fresh = toSaved({ ...d, form }, 7, 'docs')
+      const theirs = objects({ ...d, form })
+      expect([...objects(fresh)].filter(o => theirs.has(o))).toEqual([])
+      expect(parseSaved(JSON.stringify(fresh))).toEqual(fresh)
+    }
+  })
+
+  const full: SavedWorkflow = { ...emptySaved, id: 'full', name: 'Full', purpose: 'All of it', savedAt: 9, form: 'roles',
+    lead: { skills: ['redmanager'], playbook: [{ when: 'When x', do: 'do y' }], briefParts: ['Part'], model: 'opus', effort: 'high' },
+    roles: [{ ...role, model: 'sonnet', effort: 'low', isolation: 'worktree', background: true, tools: { Read: 2, Edit: 0 }, skills: ['tdd'], team: [{ ...role }] }],
+    stages: [{ agents: [{ ...savedAgent, name: 'docs', model: 'haiku', isolation: 'remote', teammate: true, team: [{ ...role }] }] }],
+    types: [{ name: 'store-reviewer', definition: '---\nname: store-reviewer\n---\n' }] }
+
+  test('a saved file is read only when every field has its shape; unknown fields are dropped', () => {
+    expect(parseSaved(JSON.stringify(full))).toEqual(full)
+    expect(parseSaved(`\uFEFF${JSON.stringify(full)}`)).toEqual(full)
+    const changed = (change: (o: any) => void) => {
+      const o = JSON.parse(JSON.stringify(full))
+      change(o)
+      return JSON.stringify(o)
+    }
+    expect(parseSaved(changed(o => { o.extra = 1; o.lead.extra = 2; o.roles[0].extra = 3; o.stages[0].extra = 4; o.stages[0].agents[0].extra = 5; o.types[0].extra = 6 }))).toEqual(full)
+    expect(parseSaved(changed(o => { o.lead.model = null; o.roles[0].isolation = null; o.roles[0].team = null }))).toEqual({
+      ...full, lead: { skills: ['redmanager'], playbook: [{ when: 'When x', do: 'do y' }], briefParts: ['Part'], effort: 'high' },
+      roles: [{ ...role, model: 'sonnet', effort: 'low', background: true, tools: { Read: 2, Edit: 0 }, skills: ['tdd'] }] })
+    const bad: ((o: any) => void)[] = [
+      o => { o.version = 2 }, o => { o.version = '1' }, o => { delete o.version }, o => { o.id = '' }, o => { o.id = '../../x' }, o => { o.id = 'a\\b' }, o => { o.id = 3 },
+      o => { o.name = '' }, o => { o.name = 3 }, o => { o.purpose = null }, o => { o.savedAt = '5' }, o => { o.project = 3 }, o => { delete o.projectKey },
+      o => { o.lead = [] }, o => { o.lead.skills = 'redmanager' }, o => { o.lead.playbook = [{ when: 'x' }] }, o => { o.lead.briefParts = [1] }, o => { o.lead.effort = 3 },
+      o => { o.form = 'both' }, o => { o.roles = {} }, o => { o.roles = [null] }, o => { o.roles[0].ran = -1 }, o => { o.roles[0].ran = 1.5 }, o => { delete o.roles[0].role },
+      o => { o.roles[0].tools = { Read: '2' } }, o => { o.roles[0].tools = ['Read'] }, o => { o.roles[0].tools = { Read: -1 } }, o => { o.roles[0].skills = 'tdd' },
+      o => { o.roles[0].isolation = 'sideways' }, o => { o.roles[0].background = 'yes' }, o => { o.roles[0].type = '' }, o => { o.roles[0].model = 4 },
+      o => { o.roles[0].team = [{ ...role, team: [role] }] }, o => { o.roles[0].team = role }, o => { o.stages = [{}] }, o => { o.stages = [{ agents: 'x' }] },
+      o => { o.stages[0].agents[0].brief = 3 }, o => { delete o.stages[0].agents[0].description }, o => { o.stages[0].agents[0].name = 7 }, o => { o.stages[0].agents[0].teammate = 1 },
+      o => { o.types = [{ name: 'x' }] }, o => { o.types = [{ name: '', definition: '' }] }, o => { o.types = 'store-reviewer' },
+    ]
+    for (const change of bad) {
+      const text = changed(change)
+      expect([text, parseSaved(text)]).toEqual([text, undefined])
+    }
+    for (const text of ['', 'not json', '{', '[]', 'null', '1', '"x"', '{}', `[${JSON.stringify(full)}]`, `{"__proto__": ${JSON.stringify(full)}}`, '['.repeat(100_000)]) {
+      expect([text.slice(0, 40), parseSaved(text)]).toEqual([text.slice(0, 40), undefined])
+    }
+  })
+
+  test("a listed workflow's id is its file's name; files that are not .json or are blank are passed over", () => {
+    const mk = (id: string, savedAt: number, key = 'k') => JSON.stringify({ ...emptySaved, id, name: id, savedAt, projectKey: key })
+    const r = listed([{ name: 'notes.txt', text: mk('notes', 5) }, { name: 'blank.json', text: '  \n' }, { name: 'renamed.json', text: mk('original', 2) },
+      { name: 'z.json', text: mk('z', 2) }, { name: 'newer.json', text: JSON.stringify({ ...emptySaved, version: 2 }) }, { name: 'list.json', text: '[]' }], 'k')
+    expect(r.workflows.map(w => [w.id, w.name])).toEqual([['renamed', 'original'], ['z', 'z']]) // the same time: by id
+    expect(r.unreadable).toBe(2)
+    expect(listed([], 'k')).toEqual({ workflows: [], unreadable: 0 })
+  })
+
+  test('notes are trimmed, and blank notes are none', () => {
+    expect(runText('Docs', '  \n ')).toBe('Run my saved REDhelm workflow "Docs".')
+    expect(runText('Docs', ' only the store \n')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only the store')
+  })
+
+  const OPENING = 'It is how this kind of work was led and staffed before: start from it, and fit it to this problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem. If an agent type or skill is not available here, go without it and say so.'
+
+  test('the Roles plan, whole', () => {
+    const w: SavedWorkflow = { ...emptySaved, name: 'Build, check, review', purpose: 'Parallel implementers, then your checks and a separate review', form: 'roles',
+      lead: { skills: ['redmanager', 'tdd'], playbook: [{ when: 'When the work splits cleanly,', do: 'start implementers together, each in its own worktree' },
+        { when: 'When an implementer reports done', do: 'run the checks yourself before moving on.' }], briefParts: ['End with STATUS: DONE or BLOCKED.', 'Never push.'] },
+      roles: [
+        { ...role, label: 'Implementer', role: 'Builds one slice in its own worktree', model: 'opus', isolation: 'worktree', background: true,
+          tools: { Read: 3, Edit: 9, Bash: 5 }, ran: 7, team: [{ ...role, label: 'Writer', model: 'sonnet', ran: 3 }, { ...role, label: 'Scout', type: 'store-scout' }] },
+        { ...role, label: 'Reviewer', role: 'API checks', type: 'store-reviewer', model: 'sonnet', effort: 'high', teammate: true, tools: { Read: 4, Grep: 0 }, skills: ['code-review'] },
+        { ...role, label: 'Linter', ran: 0, tools: { Bash: 0 } }, // added by an edit: it has not run
+      ],
+      stages: [{ agents: [{ ...savedAgent, label: 'Not in Roles' }] }] }
+    expect(planText(w, { 'store-reviewer': 'redhelm:store-reviewer', 'store-scout': 'general-purpose' }, { 'store-reviewer': ['permissionMode', 'hooks'] })).toBe([
+      'Saved REDhelm workflow "Build, check, review": Parallel implementers, then your checks and a separate review.',
+      OPENING,
+      '',
+      'Lead: use the redmanager and tdd skills to run this.',
+      '',
+      'How the lead worked last time. Use the practices that fit this problem:',
+      '1. When the work splits cleanly, start implementers together, each in its own worktree.',
+      '2. When an implementer reports done, run the checks yourself before moving on.',
+      '',
+      "Every agent's brief should include:",
+      'End with STATUS: DONE or BLOCKED.',
+      '',
+      'Never push.',
+      '',
+      'Staff it with these roles, as many of each as the work needs:',
+      '- Implementer: Builds one slice in its own worktree. subagent_type general-purpose, model opus, isolation worktree, background. Tools it used: Edit, Bash, Read. Skills: none. Ran 7 times.',
+      '  It started its own team: Writer (general-purpose, sonnet, ran 3 times), Scout (general-purpose, ran once; store-scout could not be added here). Ask it to staff its work that way.',
+      '- Reviewer: API checks. subagent_type redhelm:store-reviewer (its hooks and permission mode stayed behind), model sonnet, effort high, teammate. Tools it used: Read. Skills: code-review. Ran once.',
+      '- Linter: subagent_type general-purpose. Tools it used: none. Skills: none.',
+    ].join('\n'))
+    expect(planText({ ...w, lead: { skills: ['a', 'b', 'c'], playbook: [], briefParts: [] }, roles: [] }, {}, {})).toBe(
+      `Saved REDhelm workflow "Build, check, review": Parallel implementers, then your checks and a separate review.\n${OPENING}\n\nLead: use the a, b and c skills to run this.`)
+  })
+
+  test('the Lineup plan, whole', () => {
+    const w: SavedWorkflow = { ...emptySaved, name: 'Docs, then a review', form: 'lineup', lead: { skills: [], playbook: [], briefParts: ['Never push.'] },
+      roles: [{ ...role, label: 'Not in Lineup' }],
+      stages: [
+        { agents: [{ ...savedAgent, label: 'Docs', name: 'docs', model: 'sonnet', effort: 'medium', background: true, tools: { Edit: 5, Read: 9, Bash: 0 },
+          brief: '\nWrite the docs.\n\n  Keep the examples.\nNever push.\n\n' }, { ...savedAgent, label: 'Tests', brief: 'Add tests' }] },
+        { agents: [] },
+        { agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', skills: ['code-review'], team: [{ ...role, label: 'Checker', type: 'Explore', model: 'haiku', ran: 2 }],
+          brief: 'Review the change' }, { ...savedAgent, label: 'Lint', type: 'store-linter', brief: 'Lint it' }] },
+      ] }
+    expect(planText(w, { 'store-reviewer': 'redhelm:store-reviewer', 'store-linter': 'general-purpose' },
+      { 'store-reviewer': ['hooks', 'mcpServers', 'permissionMode'], 'store-linter': ['hooks'] })).toBe([
+      'Saved REDhelm workflow "Docs, then a review".',
+      OPENING,
+      '',
+      'Stage 1, start together:',
+      '- Docs: subagent_type general-purpose, name docs, model sonnet, effort medium, background',
+      '  Tools it used: Read 9, Edit 5. Skills it used: none.',
+      '  Brief:',
+      '  Write the docs.',
+      '',
+      '    Keep the examples.',
+      '  Never push.',
+      '- Tests: subagent_type general-purpose',
+      '  Tools it used: none. Skills it used: none.',
+      '  Brief:',
+      '  Add tests',
+      'Stage 2, after stage 1 finishes:',
+      '- Review: subagent_type redhelm:store-reviewer (its hooks, MCP servers and permission mode stayed behind)',
+      '  Tools it used: none. Skills it used: code-review.',
+      '  It started its own team: Checker (Explore, haiku, ran 2 times). Ask it to staff its work that way.',
+      '  Brief:',
+      '  Review the change',
+      '- Lint: subagent_type general-purpose (store-linter could not be added here)',
+      '  Tools it used: none. Skills it used: none.',
+      '  Brief:',
+      '  Lint it',
+    ].join('\n'))
+  })
+
+  test('an agent file in each YAML form it may take', () => {
+    const file = [
+      '---', 'name: "store-builder"', 'description: >', '  Builds the store,', '  one slice at a time', 'tools:', '  - Read', "  - 'Edit'",
+      'disallowedTools: [Bash(rm:*), WebFetch]', 'skills: tdd, brainstorming  # both', 'model: opus', 'effort: high', 'maxTurns: 30',
+      'initialPrompt: |', '  Read the plan first.', '  Then build.', 'memory: project', 'background: true', 'isolation: worktree', 'color: blue', '# a comment',
+      '---', '', 'You build the store.', '', 'One slice at a time.', '',
+    ].join('\r\n')
+    expect(typeName(file)).toBe('store-builder')
+    expect(agentSpec(file)).toEqual({ leftBehind: [], spec: { name: 'store-builder', description: 'Builds the store, one slice at a time',
+      prompt: 'You build the store.\n\nOne slice at a time.', tools: ['Read', 'Edit'], disallowedTools: ['Bash(rm:*)', 'WebFetch'], skills: ['tdd', 'brainstorming'],
+      model: 'opus', effort: 'high', maxTurns: 30, initialPrompt: 'Read the plan first.\nThen build.', memory: 'project', background: true, isolation: 'worktree' } })
+    const more = '---\nname: a\ndescription: Does\n  more than one line\ntools:\n- Read\n- Bash(git add:*, git commit:*)\nskills: []\nbackground: false\n---\nBody'
+    expect(agentSpec(more)).toEqual({ leftBehind: [], spec: { name: 'a', description: 'Does more than one line', prompt: 'Body', tools: ['Read', 'Bash(git add:*, git commit:*)'], skills: [] } })
+  })
+
+  test("an indented block is its key's value: never read as keys of its own", () => {
+    const file = '---\nname: store-reviewer\ndescription: Reviews\nhooks:\n  name: other\n  tools: Bash\n  PreToolUse:\n    - command: echo hi\nmcpServers:\n  notes:\n    command: echo notes\n---\nBody'
+    expect(typeName(file)).toBe('store-reviewer')
+    expect(agentSpec(file)).toEqual({ spec: { name: 'store-reviewer', description: 'Reviews', prompt: 'Body' }, leftBehind: ['hooks', 'mcpServers'] })
+    expect(agentSpec('---\nname: a\ndescription: b\npermissionMode: plan\n---\n')).toEqual({ spec: { name: 'a', description: 'b', prompt: '' }, leftBehind: ['permissionMode'] })
+  })
+
+  test('an agent file REDhelm cannot carry as written says why, never carries less than it asks', () => {
+    const fm = (...lines: string[]) => `---\nname: a\ndescription: b\n${lines.join('\n')}\n---\nBody`
+    const cases: [string, string][] = [
+      ['---\nname: a\ndescription: b\nBody', 'The front matter never ends'],
+      ['\n---\nname: a\n---\n', 'No front matter'],
+      ['---\ndescription: b\n---\n', 'No name'],
+      ['---\nname: a\n---\n', 'No description'],
+      ['---\nname: ""\ndescription: b\n---\n', 'No name'],
+      [fm('tools:', '  Read: yes'), "tools isn't a list"],
+      [fm('tools: Read', '  - Grep'), "tools isn't a list"],
+      [fm('tools: {Read: 1}'), "tools isn't a list"],
+      [fm('tools: [Read'), "tools isn't a list"],
+      [fm('model: [opus]'), "model isn't text"],
+      [fm('initialPrompt:', '  - one'), "initialPrompt isn't text"],
+      [fm('maxTurns: lots'), "maxTurns isn't a whole number"],
+      [fm('maxTurns: 0'), "maxTurns isn't a whole number"],
+      [fm('memory: global'), "memory isn't user, project or local"],
+      [fm('isolation: sideways'), "isolation isn't worktree or remote"],
+      [fm('background: maybe'), "background isn't true or false"],
+      [fm('just words'), "Front matter line 4 isn't key: value"],
+      [fm('tools:Read'), "Front matter line 4 isn't key: value"],
+      ['---\n  name: a\n---\n', "Front matter line 2 isn't key: value"],
+      [fm('tools: Read', 'tools: Bash'), 'tools is set twice'],
+    ]
+    for (const [file, error] of cases) expect([file, agentSpec(file)]).toEqual([file, { error }])
+    expect(agentSpec(fm('color: blue', 'color: red')).hasOwnProperty('spec')).toBe(true) // a key it never reads may repeat
+    expect(typeName(fm('just words'))).toBe('a') // finding a file by its name is never stricter than that
+    expect(typeName('---\ndescription: b\n---\n')).toBeUndefined()
+    expect(typeName('no frontmatter')).toBeUndefined()
+    expect(typeName("---\nname: 'it''s'  # quoted\n---\n")).toBe("it's")
   })
 })
