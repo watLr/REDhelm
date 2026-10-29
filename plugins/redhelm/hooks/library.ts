@@ -64,14 +64,16 @@ export const EDIT_SYSTEM = [
 ].join('\n')
 
 /** How much of a brief or a shared part the edit call is given, and of a value a reason quotes. */
-const BRIEF = 300
+const BRIEF = 6000
 const SHOWN = 60
 
 const even = (text: string) => text.replace(/\s+/g, ' ').trim()
 
-/** A brief or part for the edit call, as JSON so it can be quoted exactly: whole, or its first 300 characters. */
-const quote = (text: string) =>
-  text.length > BRIEF ? `, its first ${BRIEF} of ${text.length} characters: ${JSON.stringify(head(text, BRIEF))}` : ` ${JSON.stringify(text)}`
+/**
+ * A brief or part for the edit call, whole, so a `find` can quote it: as JSON, to be quoted exactly.
+ * Past 6,000 characters it is cut there, and says so.
+ */
+const quote = (text: string) => (text.length > BRIEF ? ` ${JSON.stringify(head(text, BRIEF))} … cut` : ` ${JSON.stringify(text)}`)
 
 /** What agents and roles share, as their line names it: label, type, settings, skills and the tools they used. */
 const setupOf = (x: SavedAgent | SavedRole) => {
@@ -87,7 +89,7 @@ const listed = (title: string, rows: readonly string[]) => (rows.length ? `${tit
 
 /**
  * What the edit call is given: the name, purpose and form; the lead skills, practices and shared parts;
- * the Lineup's stages and agents, with each brief's first 300 characters; the roles; and what you asked.
+ * the Lineup's stages and agents, each brief whole (up to 6,000 characters); the roles; and what you asked, whole.
  * Both forms are listed, since a `form` op switches. Each thing is numbered from 1, as the sheet and
  * the reasons number it, with the number an op names it by in brackets.
  */

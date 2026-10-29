@@ -1866,7 +1866,7 @@ describe('editing a draft', () => {
     expect(q.prompt).toContain('Name: "Docs"\nPurpose: none\nForm: lineup\nLead skills: redmanager\n')
     expect(q.prompt).toContain('Practices:\n1. [0] when "When parts are independent", do "start them together"\n2. [1] when "When a check fails", do "send it back"\n')
     expect(q.prompt).toContain('Shared brief parts:\n1. [0] "Part A"\n2. [1] "Part B"\n')
-    expect(q.prompt).toContain(`Stage 1 [0]:\n1. [0] Write the docs · general-purpose · effort low · skills tdd · tools Read · description "Write the docs" · brief, its first 300 of 409 characters: ${JSON.stringify(`Line one\n${'p'.repeat(291)}`)}\n`)
+    expect(q.prompt).toContain(`Stage 1 [0]:\n1. [0] Write the docs · general-purpose · effort low · skills tdd · tools Read · description "Write the docs" · brief ${JSON.stringify(`Line one\n${'p'.repeat(400)}`)}\n`)
     expect(q.prompt).toContain('Stage 2 [1]:\n2. [1] Review it · general-purpose · model opus · description "Review it" · brief "Review the change"\n')
     expect(q.prompt).toContain('Roles, the items while the form is roles:\n1. [0] general-purpose · general-purpose · ran 1 time · role ""\n2. [1] Explore · Explore · ran 1 time · role ""\n')
     expect(q.prompt.endsWith('\n\nThe change asked for: drop the review')).toBe(true)
@@ -1874,6 +1874,21 @@ describe('editing a draft', () => {
     for (const op of ['rename', 'purpose', 'form', 'lead', 'practice', 'part', 'remove', 'move', 'set', 'brief', 'skills" | "tools', 'add']) expect(EDIT_SYSTEM).toContain(`"op": "${op}"`)
     expect(EDIT_SYSTEM).toContain('{"cannot": "')
     expect(EDIT_CALL).toEqual({ model: 'sonnet', effort: 'low', maxTokens: 1200, timeoutMs: 30_000 })
+  })
+
+  test('the edit call gets each brief and shared part whole, up to 6,000 characters, so a find can quote any of it', () => {
+    const w = x()
+    const withBrief = (brief: string, part = 'Part A') =>
+      editRequest({ ...w, lead: { ...w.lead, briefParts: [part] }, stages: [{ agents: [{ ...w.stages[0]!.agents[0]!, brief }] }] }, 'x').prompt
+    const thousand = `Start ${'a'.repeat(989)} end.`
+    expect(thousand).toHaveLength(1000)
+    expect(withBrief(thousand)).toContain(`brief ${JSON.stringify(thousand)}\n`)
+    const seven = 'b'.repeat(7000)
+    expect(withBrief(seven)).toContain(`brief ${JSON.stringify('b'.repeat(6000))} … cut\n`)
+    expect(withBrief(seven)).not.toContain('b'.repeat(6001))
+    expect(withBrief('x', 'c'.repeat(7000))).toContain(`Shared brief parts:\n1. [0] ${JSON.stringify('c'.repeat(6000))} … cut\n`)
+    expect(withBrief('b'.repeat(6000))).toContain(`brief ${JSON.stringify('b'.repeat(6000))}\n`) // exactly 6,000 is whole
+    expect(editRequest(w, `append ${'z'.repeat(7000)}`).prompt.endsWith(`The change asked for: append ${'z'.repeat(7000)}`)).toBe(true) // your ask stays whole
   })
 
   test('an answer is the JSON object in it: fenced or prefaced still parses; anything else is no answer', () => {
