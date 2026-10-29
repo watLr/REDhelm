@@ -369,16 +369,34 @@ const OPERATOR = /^[&|;()<>]+$/
 const ASSIGNMENT = /^[A-Za-z_]\w*=/
 /** A subcommand is a plain word: not a flag, a path, a file name or a value. */
 const SUBCOMMAND = /^[a-z][\w:-]*$/i
+/** The programs whose next word is a subcommand (`git commit`, `npm test`). Any other program's next word is an argument, never kept. */
+const HAS_SUBCOMMANDS = new Set(['git', 'npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx', 'deno', 'cargo', 'go', 'docker', 'kubectl', 'gh', 'claude', 'make'])
 /** Commands that only set up the one after them. */
 const SETUP = new Set(['cd', 'pushd', 'popd', 'export', 'source', '.'])
+/** Programs that run the command after them (`sudo rm`, `env FOO=1 npm test`): the trace names that one. */
+const WRAPPERS = new Set(['sudo', 'env', 'time', 'nohup', 'command', 'exec', 'nice'])
 
 /** A program by its name, never its path. */
 const program = (word: string) => word.replace(/^["']|["']$/g, '').split('/').pop() || word
 
 /**
- * A command as the lead trace shows it: the program and its subcommand, nothing else. The first
- * command that does more than set up the next one (`cd`, `export`) speaks for the line; variables
- * set before it, arguments, values and paths are left out.
+ * A command's words from the program it runs: variables set before it and wrappers left out. A
+ * wrapper given flags stays, so a flag's value (`sudo -u root`) is never taken for the program.
+ */
+function unwrap(words: readonly string[]) {
+  let k = 0
+  while (k < words.length) {
+    const next = words[k + 1]
+    if (ASSIGNMENT.test(words[k]!) || (WRAPPERS.has(program(words[k]!)) && next !== undefined && !next.startsWith('-'))) k++
+    else break
+  }
+  return words.slice(k)
+}
+
+/**
+ * A command as the lead trace shows it: the program, and its subcommand when it is one of the few
+ * programs that have them; nothing else, so no argument, value or path reaches the trace. The first
+ * command that does more than set up the next one (`cd`, `export`) speaks for the line.
  */
 export function command(cmd: string): string {
   const commands: string[][] = [[]]
@@ -386,14 +404,12 @@ export function command(cmd: string): string {
     if (OPERATOR.test(word)) commands.push([])
     else commands[commands.length - 1]!.push(word)
   }
-  // Each command without the variables set before it; one that only sets variables is none.
-  const bare = commands.flatMap(c => {
-    const k = c.findIndex(w => !ASSIGNMENT.test(w))
-    return k < 0 ? [] : [c.slice(k)]
-  })
+  // One that only sets variables is no command.
+  const bare = commands.map(unwrap).filter(c => c.length)
   const [first, sub] = bare.find(c => !SETUP.has(program(c[0]!))) ?? bare[0] ?? []
   if (!first) return ''
-  return sub && SUBCOMMAND.test(sub) ? `${program(first)} ${sub}` : program(first)
+  const name = program(first)
+  return sub && HAS_SUBCOMMANDS.has(name) && SUBCOMMAND.test(sub) ? `${name} ${sub}` : name
 }
 
 /**

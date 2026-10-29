@@ -1596,6 +1596,22 @@ describe('reading a session', () => {
     expect(command('npm test\nnpm run lint')).toBe('npm test')
     expect(command('cd /p')).toBe('cd')
   })
+  test("a program's first argument is never kept, unless the program has subcommands; a wrapper names the command it runs", () => {
+    expect(command('echo sk_live_abc123')).toBe('echo')
+    expect(command('cat notes')).toBe('cat')
+    expect(command('mkdir secretdir')).toBe('mkdir')
+    expect(command('grep hunter2 file')).toBe('grep')
+    expect(command('sudo rm -rf build')).toBe('rm')
+    expect(command('env FOO=1 npm test')).toBe('npm test')
+    // A wrapper given flags stays alone: a flag's value (`-u root`) is never read as the program.
+    expect(command('sudo -u root rm -rf build')).toBe('sudo')
+    expect(command('time /usr/bin/git push --force')).toBe('git push')
+    expect(command('npx tsc -p plugins/redhelm')).toBe('npx tsc')
+    // The brief's cases still hold.
+    expect(command('cd app && FOO=1 npm test -- --watch')).toBe('npm test')
+    expect(command('git commit -m "token=abc"')).toBe('git commit')
+    expect(command('ls -la /p')).toBe('ls')
+  })
   test("readWorkflow: each agent and role gets its own team; labels cut at a word; Earlier while there is one before", () => {
     const msgs = [you('one'), lead(call('a1', { description: 'Review the whole store module' })), you('two'), lead(call('a2', { description: 'Add tests' }))]
     const list = stretches(msgs)
