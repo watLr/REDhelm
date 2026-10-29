@@ -12,6 +12,7 @@ import { label, rack, relevant, shortName, summary, type View } from '../hooks/v
 import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail } from '../hooks/trace'
 import { clean, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
+import { agentCalls, defaultForm, foldRepeats, isPrompt, leadSkills, stagesOf, stretches, widen, type Msg } from '../hooks/workflows'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -1432,5 +1433,69 @@ describe('workflow records', () => {
     await engine(on, true)($)
     await $.agent.spawn({ prompt: 'x', description: 'Scout', subagentType: 'Explore', parentAgentId: 'lead1', isTeammate: true, provider: { plugin: 'project', tier: 'user' } } as any)
     expect((await agents($)).a1).toMatchObject({ parent: 'lead1', teammate: true, origin: 'project' })
+  })
+})
+
+const you = (text: string): Msg => ({ role: 'user', text, toolUses: [] })
+const lead = (...toolUses: any[]): Msg => ({ role: 'assistant', text: '', toolUses })
+const call = (agentId: string, input: Record<string, unknown> = {}) =>
+  ({ tool: 'Agent', agentId, input: { description: 'Write the docs', prompt: 'Write docs/api.md', subagent_type: 'general-purpose', ...input } })
+const skill = (name: string) => ({ tool: 'Skill', input: { skill: name } })
+// Shapes seen in Task 1 (findings 1 and 2).
+const notice = (text: string): Msg => ({ role: 'user', text: `<task-notification> <task-id>a1</task-id> ${text} </task-notification>`, toolUses: [] })
+const slash = (name: string): Msg => ({ role: 'user', text: `<command-message>${name}</command-message> <command-name>/${name}</command-name>`, toolUses: [] })
+const result = (): Msg => ({ role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't', text: 'Async agent launched successfully.' }] })
+
+describe('reading a session', () => {
+  test('stretches split at your prompts that started agents; a skill that led keeps the rest whole', () => {
+    const msgs = [you('Write the docs'), lead(call('a1')), you('thanks'), you('Now test it'), lead(call('a2', { description: 'Add tests' }))]
+    expect(stretches(msgs)).toEqual([{ from: 0, to: 3, led: false }, { from: 3, to: 5, led: false }])
+    expect(widen(stretches(msgs), 1)).toEqual({ from: 0, to: 5, led: false })
+    const led = [you('Plan the build'), lead(skill('redmanager')), lead(call('a1')), you('go on'), lead(call('a2'))]
+    expect(stretches(led)).toEqual([{ from: 0, to: 5, led: true }])
+  })
+  test('notifications are not your prompts', () => {
+    expect(isPrompt(notice('agent a1 finished'))).toBe(false)
+    expect(isPrompt(result())).toBe(false)
+    expect(isPrompt(you('[Request interrupted by user]'))).toBe(false)
+    expect(isPrompt(slash('probe-skill'))).toBe(true)
+    expect(isPrompt(you('hi'))).toBe(true)
+    expect(stretches([you('go'), lead(call('a1', { run_in_background: true })), notice('done'), lead(call('a2'))])).toHaveLength(1)
+  })
+  test('lead skills come from the Skill tool and from / commands, once each, in order', () => {
+    const msgs = [slash('redmanager'), lead(skill('brainstorming'), skill('redmanager')), lead(call('a1'))]
+    expect(leadSkills(msgs, { from: 0, to: 3, led: true })).toEqual(['redmanager', 'brainstorming'])
+    // A / command the model never answered (a built-in like /effort) is not a skill.
+    expect(leadSkills([slash('effort'), you('go'), lead(call('a1'))], { from: 0, to: 3, led: false })).toEqual([])
+  })
+  test('one lead message is a run of assistant messages; a tool result between two calls splits it', () => {
+    const msgs = [you('go'), lead(call('a1')), lead(call('a2', { description: 'Add tests' })), result(), result(), lead(call('a3', { description: 'Review' }))]
+    expect(stagesOf(agentCalls(msgs, { from: 0, to: 6, led: false }), {}).map(st => st.map(c => c.agentId))).toEqual([['a1', 'a2'], ['a3']])
+  })
+  test('one lead message is one stage; started while another runs joins it; started after all ended opens the next', () => {
+    const records = { a1: agent({ id: 'a1', startedAt: 0, endedAt: 50 }), a2: agent({ id: 'a2', startedAt: 0, endedAt: 90 }),
+      a3: agent({ id: 'a3', startedAt: 60, endedAt: 99 }), a4: agent({ id: 'a4', startedAt: 100 }) }
+    const msgs = [you('go'), lead(call('a1'), call('a2', { description: 'Add tests' })), result(), lead(call('a3', { description: 'Check types' })), result(), lead(call('a4', { description: 'Review' }))]
+    const s = { from: 0, to: 6, led: false }
+    expect(stagesOf(agentCalls(msgs, s), records).map(st => st.map(c => c.agentId))).toEqual([['a1', 'a2', 'a3'], ['a4']])
+    expect(stagesOf(agentCalls(msgs, s), {}).map(st => st.map(c => c.agentId))).toEqual([['a1', 'a2'], ['a3'], ['a4']])
+  })
+  test('a failed or refused Agent call is not read', () => {
+    const msgs = [you('go'), lead({ ...call('a9'), isError: true }, { ...call(''), agentId: undefined })]
+    expect(agentCalls(msgs, { from: 0, to: 2, led: false })).toEqual([])
+  })
+  test('a repeat in a later stage folds with its count; two alike in one stage are peers', () => {
+    const impl = (id: string) => call(id, { description: 'Build the slice', name: 'impl' })
+    const rev = (id: string) => call(id, { description: 'Review the slice', subagent_type: 'reviewer' })
+    const msgs = [you('go'), lead(impl('a1')), result(), lead(rev('a2')), result(), lead(impl('a3')), result(), lead(rev('a4')), result(),
+      lead(call('a5', { subagent_type: 'Explore' }), call('a6', { subagent_type: 'Explore' }))]
+    const st = stagesOf(agentCalls(msgs, { from: 0, to: 10, led: false }), {})
+    const r = foldRepeats(st)
+    expect(r.stages.map(x => x.map(c => c.agentId))).toEqual([['a1'], ['a2'], ['a5', 'a6']])
+    expect(r.folded).toEqual([{ label: 'Build the slice', times: 2 }, { label: 'Review the slice', times: 2 }])
+  })
+  test('the default form is Roles when a skill loaded before the first agent', () => {
+    expect(defaultForm([you('go'), lead(skill('redmanager')), lead(call('a1'))], { from: 0, to: 3, led: true })).toBe('roles')
+    expect(defaultForm([you('go'), lead(call('a1')), lead(skill('status-board'))], { from: 0, to: 3, led: false })).toBe('lineup')
   })
 })

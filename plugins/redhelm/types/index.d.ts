@@ -102,6 +102,81 @@ export type Guard = {
   stale?: string
 }
 
+export type SavedWorkflow = {
+  version: 1
+  id: string            // file name: slug of the name
+  name: string          // ≤ 40 characters
+  purpose: string       // one line, ≤ 90 characters
+  savedAt: number
+  project: string       // the folder's name, for "from notes-app"; never a full path
+  projectKey: string    // hash of the session root, to list this project's workflows first
+  lead: Lead
+  form: 'roles' | 'lineup'
+  roles: SavedRole[]    // form 'roles': the team as roles
+  stages: { agents: SavedAgent[] }[]   // form 'lineup': the team as it ran; a stage starts together
+  types: SavedType[]    // the project's own agent types the team ran as, copied (§9)
+}
+
+export type Lead = {
+  skills: string[]      // skills the lead loaded, in order, no repeats: ["redmanager"]
+  playbook: Practice[]  // how the lead worked, read from the session and confirmed (§4)
+  briefParts: string[]  // paragraphs most briefs shared, verbatim (§4)
+  model?: string        // what the lead ran on
+  effort?: string
+}
+
+export type Practice = { when: string; do: string }   // each ≤ 120 characters
+
+export type SavedRole = {
+  label: string         // ≤ 16 characters: "Implementer"
+  role: string          // one line: "Builds one slice in its own worktree"
+  type: string          // subagent_type; a copied type keeps its own name
+  model?: string
+  effort?: string
+  isolation?: 'worktree' | 'remote'
+  background: boolean
+  teammate: boolean
+  tools: Record<string, number>   // summed over the agents that filled it; MCP as "mcp:<server>"
+  skills: string[]
+  ran: number           // how many agents filled it
+  team?: SavedRole[]    // the roles its own agents filled, one level down (§3)
+}
+
+export type SavedAgent = {
+  label: string         // ≤ 16 characters: "Tests"
+  description: string   // the Agent call's description
+  brief: string         // the Agent call's prompt, whole, as given
+  type: string
+  model?: string
+  effort?: string
+  name?: string
+  background: boolean
+  teammate: boolean
+  isolation?: 'worktree' | 'remote'
+  tools: Record<string, number>
+  skills: string[]
+  team?: SavedRole[]
+}
+
+export type SavedType = {
+  name: string          // as the project named it: "store-reviewer"
+  definition: string    // its agent file, whole, as it was at Save
+}
+
+/** What Save read from the session. It carries both `roles` and `stages`, so `Save as` switches without reading again. */
+export type Draft = Omit<SavedWorkflow, 'version' | 'id' | 'savedAt'> & {
+  /** Lineup repeats folded away: "<label> ran <times> times · saved once". */
+  folded: { label: string; times: number }[]
+  /** Project types whose file was found but could not be read: "type not copied". */
+  notCopied: string[]
+  /** Per practice, the trace lines it cites. For the sheet; never saved. */
+  evidence: string[][]
+  read: 'pending' | 'done' | 'failed'
+  /** How many times Earlier widened the stretch, and whether it can again. */
+  back: number
+  more: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     redhelm: {
