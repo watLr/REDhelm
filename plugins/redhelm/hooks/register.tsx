@@ -560,7 +560,7 @@ async function skipSetup($: $) {
   await update($, setup, () => [])
 }
 
-/** /redhelm models: what actually answered this session, and the latest model switches. */
+/** /redhelm models: what actually answered this session, the latest model switches, and what REDhelm's own model calls used. */
 async function modelsReport($: $) {
   const use = (await $.state.get(USAGE)).value ?? {}
   const switches = ((await $.store.get('switches')) ?? []) as { at: number; from: string; to: string; source: string }[]
@@ -577,7 +577,8 @@ async function modelsReport($: $) {
       ? switches.slice(-5).reverse().map(s => `  ${span(at - s.at).padStart(4)} ago  ${short(s.from)} → ${short(s.to)}  (${s.source === 'auto' ? 'on its own' : s.source})`)
       : ['  none']),
     '',
-    `REDhelm labels (${cfg.labels === 'haiku' ? 'Haiku, low effort' : 'off'}): ${spent.calls} ${spent.calls === 1 ? 'request' : 'requests'}, ${kilo(spent.input)} in, ${kilo(spent.output)} out`,
+    // Labels, and a workflow's reading and edits, which run whatever the labels setting.
+    `REDhelm's own model calls (labels: ${cfg.labels === 'haiku' ? 'Haiku, low effort' : 'off'}; workflows: Sonnet, low effort): ${spent.calls} ${spent.calls === 1 ? 'request' : 'requests'}, ${kilo(spent.input)} in, ${kilo(spent.output)} out`,
   ]
   return lines.join('\n')
 }

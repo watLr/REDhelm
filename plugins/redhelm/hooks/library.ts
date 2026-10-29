@@ -644,6 +644,8 @@ export function runText(name: string, notes: string): string {
   return `Run my saved REDhelm workflow "${name}".${n ? ` My notes for this run: ${n}` : ''}`
 }
 
+/** Claude Code keeps saved workflows of its own, which its Workflow tool runs by name: the plan says first that this is not one of them. */
+const NOT_THEIRS = "It is not one of Claude Code's saved workflows, so don't look it up by name: start the agents below with the Agent tool, or write a Workflow script from them."
 const OPENING = 'It is how this kind of work was led and staffed before: start from it, and fit it to this problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem. If an agent type or skill is not available here, go without it and say so.'
 
 const LEFT_WORDS: Record<(typeof LEFT_BEHIND)[number], string> = { hooks: 'hooks', mcpServers: 'MCP servers', permissionMode: 'permission mode' }
@@ -718,7 +720,8 @@ function agentItem(a: SavedAgent, h: Here) {
 const practiceLine = (p: Practice) => sentence([p.when.trim().replace(/[\s,;:.]+$/, ''), p.do.trim()].filter(Boolean).join(', '))
 
 /**
- * The plan Claude gets in the prompt's context when you run a workflow (spec §8): the opening, then
+ * The plan Claude gets in the prompt's context when you run a workflow (spec §8): the opening (that it
+ * is no saved workflow of Claude Code's to look up by name, and how to use it), then
  * the lead skills, the playbook, the shared brief parts (Roles), and the roles or the stages, each only
  * when it has something in it. A type is named as it runs here: `registered` maps a saved type to
  * `redhelm:<name>`, or to `general-purpose` when its copy could not be added, which the plan says;
@@ -727,7 +730,7 @@ const practiceLine = (p: Practice) => sentence([p.when.trim().replace(/[\s,;:.]+
 export function planText(w: SavedWorkflow, registered: Record<string, string>, leftBehind: Record<string, string[]>): string {
   const h = { registered, leftBehind }
   const purpose = w.purpose.trim()
-  const blocks = [`Saved REDhelm workflow "${w.name}"${purpose ? `: ${sentence(purpose)}` : '.'}\n${OPENING}`]
+  const blocks = [`Saved REDhelm workflow "${w.name}"${purpose ? `: ${sentence(purpose)}` : '.'}\n${NOT_THEIRS}\n${OPENING}`]
   const skills = w.lead.skills
   if (skills.length) blocks.push(`Lead: use the ${and(skills)} skill${skills.length > 1 ? 's' : ''} to run this.`)
   const playbook = w.lead.playbook.filter(p => p.when.trim() || p.do.trim())

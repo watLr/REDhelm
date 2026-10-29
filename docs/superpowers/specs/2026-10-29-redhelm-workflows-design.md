@@ -284,6 +284,8 @@ is something you asked for).
   - a practice whose text has a number is dropped unless a cited event is one of your prompts
     holding that number;
   - at most eight practices.
+- **Labels told apart**, after the reading or the fallbacks: within the lineup (all its stages) and
+  within the roles, a second and later label alike gets ` 2`, ` 3`…, cut to stay within 16 characters.
 - **Fallbacks**, when the call fails, times out or is all dropped: agents' descriptions as
   labels, their first three joined as the name ("Docs, Tests, Review"), no purpose, roles
   labelled by type, an empty playbook. The sheet says `Couldn't read this session's lead` and
@@ -355,6 +357,8 @@ in state, not parsed from the text), and rewrites the prompt:
 
 ```
 Saved REDhelm workflow "<name>": <purpose>.
+It is not one of Claude Code's saved workflows, so don't look it up by name: start the agents
+below with the Agent tool, or write a Workflow script from them.
 It is how this kind of work was led and staffed before: start from it, and fit it to this
 problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem.
 If an agent type or skill is not available here, go without it and say so.

@@ -251,6 +251,48 @@ function labelOf(text: string, n = LABEL) {
   return (word > 0 ? t.slice(0, word) : head(t, n)).replace(/[\s,;:.·–—-]+$/, '') || head(t, n)
 }
 
+/** A label and ` n`, its text cut (at a space or a hyphen, else hard) to leave the number room within 16 characters. */
+function numbered(text: string, n: number) {
+  const room = LABEL - ` ${n}`.length
+  const word = Math.max(text.lastIndexOf(' ', room), text.lastIndexOf('-', room))
+  const cut = text.length <= room ? text : (word > 0 ? text.slice(0, word) : head(text, room)).replace(/[\s,;:.·–—-]+$/, '') || head(text, room)
+  return cut ? `${cut} ${n}` : String(n)
+}
+
+/**
+ * One list's labels told apart: the first of each keeps it, and a later one alike (whatever the case)
+ * gets " 2", " 3"…, the first number that makes a label no other in the list has, within 16 characters.
+ */
+export function distinctLabels(labels: readonly string[]): string[] {
+  const key = (l: string) => l.toLowerCase()
+  const taken = new Set(labels.map(key))
+  const firsts = new Set<string>()
+  return labels.map(l => {
+    if (!firsts.has(key(l))) {
+      firsts.add(key(l))
+      return l
+    }
+    let n = 2
+    while (taken.has(key(numbered(l, n)))) n++
+    const out = numbered(l, n)
+    taken.add(key(out))
+    return out
+  })
+}
+
+/** The items with their labels told apart. */
+function apart<T extends { label: string }>(xs: readonly T[]): T[] {
+  const labels = distinctLabels(xs.map(x => x.label))
+  return xs.map((x, k) => (x.label === labels[k] ? x : { ...x, label: labels[k]! }))
+}
+
+/** The lineup with its agents' labels told apart across all its stages. */
+function lineupApart(stages: readonly { agents: SavedAgent[] }[]) {
+  const agents = apart(stages.flatMap(s => s.agents))
+  let k = 0
+  return stages.map(s => ({ agents: s.agents.map(() => agents[k++]!) }))
+}
+
 /** Tool counts added into `into`, by their own keys only: a tool named like an Object method still adds up. */
 function addTools(into: Record<string, number>, from: Record<string, number> | undefined) {
   for (const [k, n] of Object.entries(from ?? {})) into[k] = (Object.hasOwn(into, k) ? into[k]! : 0) + n
@@ -274,8 +316,8 @@ const setupOf = (i: AgentInput) => JSON.stringify([typeOf(i), i.model, i.effort,
 /**
  * The agents as roles, in the order each setup first ran: `ran` counts the agents that filled it,
  * their tools are summed and their skills joined. Labelled by type (a plugin's by its own name, after
- * the colon) until the reading names them; the role line is the reading's. With `teams`, each role
- * gets the roles its agents' own agents filled.
+ * the colon, and two of one type told apart) until the reading names them; the role line is the
+ * reading's. With `teams`, each role gets the roles its agents' own agents filled.
  */
 export function groupRoles(calls: readonly Call[], records: Record<string, Agent>, teams?: Record<string, readonly Msg[]>): SavedRole[] {
   const groups = new Map<string, Call[]>()
@@ -285,7 +327,7 @@ export function groupRoles(calls: readonly Call[], records: Record<string, Agent
     if (group) group.push(c)
     else groups.set(k, [c])
   }
-  return [...groups.values()].map(group => {
+  return apart([...groups.values()].map(group => {
     const first = group[0]!.input
     const type = typeOf(first)
     const of = (c: Call) => records[c.agentId]
@@ -303,7 +345,7 @@ export function groupRoles(calls: readonly Call[], records: Record<string, Agent
       ran: group.length,
       team: teams && someOrNone(groupRoles(group.flatMap(c => ownCalls(teams[c.agentId])), records)),
     })
-  })
+  }))
 }
 
 /** An agent's own agents as roles, one level down: theirs count only in their tools. Undefined when it started none. */
@@ -537,8 +579,8 @@ export type ReadInput = {
 
 /**
  * What Save saw, before the reading: the stretch Earlier widened to, its lead skills and shared brief
- * parts, its agents as roles and as the lineup (both, so `Save as` switches without reading again),
- * and nothing read yet. Undefined when the stretch holds no agent work.
+ * parts, its agents as roles and as the lineup (both, so `Save as` switches without reading again,
+ * each with its labels told apart), and nothing read yet. Undefined when the stretch holds no agent work.
  */
 export function readWorkflow({ msgs, records, teams, list, back, root, lead }: ReadInput): Draft | undefined {
   const s = widen(list, back)
@@ -555,7 +597,7 @@ export function readWorkflow({ msgs, records, teams, list, back, root, lead }: R
     lead: compact({ skills: leadSkills(msgs, s), playbook: [], briefParts: sharedParts(calls.map(c => c.input.prompt ?? '')), model: lead.model, effort: lead.effort }),
     form: defaultForm(msgs, s),
     roles: groupRoles(calls, records, teams),
-    stages: stages.map(st => ({ agents: st.map(c => savedAgent(c, records, teams)) })),
+    stages: lineupApart(stages.map(st => ({ agents: st.map(c => savedAgent(c, records, teams)) }))),
     types: [],
     folded,
     notCopied: [],
@@ -600,19 +642,21 @@ const setupKey = (x: { type: string; model?: string; effort?: string; isolation?
 /**
  * What the reading is given: the trace, a row a step; the lead skills; a workflow script's first
  * 6,000 characters; each agent's description and its brief's first 300; each role's setup and the
- * agents that filled it; and how many labels and roles to give.
+ * agents that filled it; and how many labels and roles to give, each field's limit stated beside its
+ * list. A role label past 16 characters is dropped, and the role keeps its type for a label as if it
+ * had never been named; a label that only repeats the type looks the same.
  */
 export function readingRequest(d: Draft, trace: readonly TraceEvent[], script?: string): { system: string; prompt: string } {
   const agents = agentsOf(d)
   const parts = [`Steps:\n${trace.map(row).join('\n')}`, `Lead skills: ${d.lead.skills.join(', ') || 'none'}`]
   if (script?.trim()) parts.push(`Workflow script:\n${head(script, SCRIPT)}`)
   const agent = (a: SavedAgent, k: number) => `${k + 1}. ${even(a.description) || a.type}${a.brief.trim() ? ` — brief: ${head(even(a.brief), BRIEF)}` : ''}`
-  parts.push(`Agents, in order. Give ${plural(agents.length, 'label')}, one per agent:\n${agents.map(agent).join('\n')}`)
+  parts.push(`Agents, in order. Give ${plural(agents.length, 'label')}, one per agent, in this order. Each label names the job the agent did, at most ${LABEL} characters; a longer one is dropped.\n${agents.map(agent).join('\n')}`)
   const role = (r: SavedRole, k: number) => {
     const by = agents.flatMap((a, i) => (setupKey(a) === setupKey(r) ? [i + 1] : []))
     return `${k + 1}. ${[r.type, r.model, r.effort, r.isolation].filter(Boolean).join(' · ')}, ran ${r.ran}×${by.length ? `, agents ${by.join(', ')}` : ''}`
   }
-  parts.push(`Roles, in order. Give ${plural(d.roles.length, 'role')}, one per role:\n${d.roles.map(role).join('\n')}`)
+  parts.push(`Roles, in order. Give ${plural(d.roles.length, 'role')}, one per role, in this order, each as {"label", "role"}. label: a name for the job its agents did, at most ${LABEL} characters, not its type. role: one line on what they did, at most ${ROLE} characters. A longer one is dropped.\n${d.roles.map(role).join('\n')}`)
   return { system: READING_SYSTEM, prompt: parts.join('\n\n') }
 }
 
@@ -707,20 +751,21 @@ export function checkReading(text: string | undefined, trace: readonly TraceEven
 /**
  * The draft with its reading: names, role lines, the playbook, and each practice's evidence as the
  * steps it cites. Without one (the call failed, timed out or was all dropped), the fallbacks: the
- * labels as seen, no purpose, roles by type, no playbook. A missing name is the first three labels.
+ * labels as seen, no purpose, roles by type, no playbook. Either way the lineup's labels, across its
+ * stages, and the roles' are each told apart ("Describe", "Describe 2"). A missing name is the first three labels.
  */
 export function applyReading(d: Draft, r: Reading | undefined, trace: readonly TraceEvent[]): Draft {
   const labels = r?.labels
   const named = r?.roles
   let k = 0
-  const stages = labels ? d.stages.map(s => ({ agents: s.agents.map(a => ({ ...a, label: labels[k++] ?? a.label })) })) : d.stages
+  const stages = lineupApart(labels ? d.stages.map(s => ({ agents: s.agents.map(a => ({ ...a, label: labels[k++] ?? a.label })) })) : d.stages)
   const steps = new Map(trace.filter(e => e.n >= 1).map(e => [e.n, e] as const))
   return {
     ...d,
     name: r?.name ?? labelOf(agentsOf({ ...d, stages }).slice(0, 3).map(a => a.label).join(', '), NAME),
     purpose: r?.purpose ?? '',
     lead: { ...d.lead, playbook: r?.playbook ?? [] },
-    roles: named ? d.roles.map((role, i) => ({ ...role, ...named[i] })) : d.roles,
+    roles: apart(named ? d.roles.map((role, i) => ({ ...role, ...named[i] })) : d.roles),
     stages,
     evidence: r?.evidence.map(ns => ns.flatMap(n => (steps.has(n) ? [row(steps.get(n)!)] : []))) ?? [],
     read: r ? 'done' : 'failed',

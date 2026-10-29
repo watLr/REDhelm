@@ -13,7 +13,7 @@ import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail }
 import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
-  READING_CALL, READING_SYSTEM, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
+  READING_CALL, READING_SYSTEM, distinctLabels, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
 import { applyOps, checkOps, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
   EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
 import { agentSpec, typeName } from '../hooks/agentfile'
@@ -1672,8 +1672,10 @@ describe('the reading', () => {
     expect(q.prompt).toContain('Lead skills: redmanager')
     expect(q.prompt).toContain(`Workflow script:\n${'s'.repeat(6000)}\n`)
     expect(q.prompt).not.toContain('s'.repeat(6001))
-    expect(q.prompt).toContain(`Give 2 labels, one per agent:\n1. Write the docs — brief: Line one ${'p'.repeat(291)}\n2. Add tests — brief: Write docs/api.md`)
-    expect(q.prompt).toContain('Give 1 role, one per role:\n1. general-purpose, ran 2×, agents 1, 2')
+    expect(q.prompt).toContain(`Give 2 labels, one per agent, in this order. Each label names the job the agent did, at most 16 characters; a longer one is dropped.\n`
+      + `1. Write the docs — brief: Line one ${'p'.repeat(291)}\n2. Add tests — brief: Write docs/api.md`)
+    expect(q.prompt).toContain('Give 1 role, one per role, in this order, each as {"label", "role"}. ')
+    expect(q.prompt).toContain('A longer one is dropped.\n1. general-purpose, ran 2×, agents 1, 2')
     expect(READING_CALL).toEqual({ model: 'sonnet', effort: 'low', maxTokens: 1500, timeoutMs: 30_000 })
   })
   test('the line of steps left out is no step; a number must be one you said; one bad label falls back; nothing kept is no reading', () => {
@@ -1702,6 +1704,71 @@ describe('the reading', () => {
     const four = readWorkflow({ msgs: [you('go'), lead(call('a1', { description: 'Review the whole store' }), call('a2', { description: 'Check every type here' }),
       call('a3', { description: 'Write the new docs' }), call('a4', { description: 'Extra' }))], records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p', lead: {} })!
     expect(applyReading(four, undefined, []).name).toBe('Review the whole, Check every type')
+  })
+})
+
+describe('labels that tell items apart', () => {
+  const read = (msgs: Msg[]) => readWorkflow({ msgs, records: {}, teams: {}, list: [{ from: 0, to: msgs.length, led: false }], back: 0, root: '/p', lead: {} })!
+  const t = (msgs: Msg[]) => leadTrace(msgs, { from: 0, to: msgs.length, led: false })
+  test('a second and later duplicate gets " 2", " 3"…, cut so it stays within 16 characters, never a label the list already has', () => {
+    expect(distinctLabels(['Describe', 'Describe', 'Review', 'Describe'])).toEqual(['Describe', 'Describe 2', 'Review', 'Describe 3'])
+    expect(distinctLabels(['Describe', 'describe'])).toEqual(['Describe', 'describe 2']) // alike to read, whatever the case
+    expect(distinctLabels(['Review the whole', 'Review the whole'])).toEqual(['Review the whole', 'Review the 2']) // 16: cut at a word
+    expect(distinctLabels(['Parsersandlexers', 'Parsersandlexers'])).toEqual(['Parsersandlexers', 'Parsersandlexe 2']) // no word: cut hard
+    expect(distinctLabels(['general-purpose', 'general-purpose'])).toEqual(['general-purpose', 'general 2']) // a hyphen ends a word
+    expect(distinctLabels(Array.from({ length: 10 }, () => 'Describe the API'))[9]).toBe('Describe the 10')
+    expect(distinctLabels(['A', 'A', 'A 2'])).toEqual(['A', 'A 3', 'A 2'])
+    expect(distinctLabels(['Docs', 'Tests'])).toEqual(['Docs', 'Tests'])
+    expect(distinctLabels([])).toEqual([])
+  })
+  test('the fallback labels of two agents alike are told apart, across stages; so are two roles of one type', () => {
+    const msgs = [you('Explain the parser and the lexer'), lead(call('a1', { description: 'Describe parser.ts' }), call('a2', { description: 'Describe lexer.ts', model: 'opus' })),
+      result(), lead(call('a3', { description: 'Describe tests.ts', subagent_type: 'Explore' }))]
+    const d = read(msgs)
+    expect(d.stages.map(st => st.agents.map(a => a.label))).toEqual([['Describe', 'Describe 2'], ['Describe 3']])
+    expect(d.roles.map(r => r.label)).toEqual(['general-purpose', 'general 2', 'Explore'])
+    const failed = applyReading(d, undefined, [])
+    expect(failed.stages.flatMap(st => st.agents.map(a => a.label))).toEqual(['Describe', 'Describe 2', 'Describe 3'])
+    expect(failed.roles.map(r => r.label)).toEqual(['general-purpose', 'general 2', 'Explore'])
+  })
+  test('labels the reading gives alike are told apart: the lineup across all its stages, the roles on their own', () => {
+    const msgs = [you('Explain the parser and the lexer'), lead(call('a1', { description: 'Read parser.ts' }), call('a2', { description: 'Read lexer.ts', model: 'opus' })),
+      result(), lead(call('a3', { description: 'Read both', subagent_type: 'Explore' }))]
+    const d = read(msgs)
+    const answer = JSON.stringify({ name: 'Read the sources', labels: ['Describe', 'Describe', 'Describe'],
+      roles: [{ label: 'Reader', role: 'Reads one file' }, { label: 'Reader', role: 'Reads one file, on opus' }, { label: 'Describe', role: 'Reads both' }], playbook: [] })
+    const r = applyReading(d, checkReading(answer, t(msgs), d), t(msgs))
+    expect(r.stages.map(st => st.agents.map(a => a.label))).toEqual([['Describe', 'Describe 2'], ['Describe 3']])
+    expect(r.roles.map(x => x.label)).toEqual(['Reader', 'Reader 2', 'Describe']) // roles are their own list
+  })
+})
+
+describe('role labels from the reading', () => {
+  // A Roles draft: a lead skill loaded first; two Explore readers together, then one general-purpose bug hunter.
+  const msgs = [you('Explain both files, then hunt bugs'), lead(skill('redmanager')), lead(call('a1', { description: 'Describe parser.ts', subagent_type: 'Explore' }),
+    call('a2', { description: 'Describe lexer.ts', subagent_type: 'Explore' })), result(), lead(call('a3', { description: 'Hunt bugs in both files' }))]
+  const s = { from: 0, to: msgs.length, led: true }
+  const d = () => readWorkflow({ msgs, records: {}, teams: {}, list: [s], back: 0, root: '/p', lead: {} })!
+  const trace = () => leadTrace(msgs, s)
+  test('a good answer names both roles', () => {
+    expect(d()).toMatchObject({ form: 'roles', roles: [{ label: 'Explore', type: 'Explore', ran: 2 }, { label: 'general-purpose', ran: 1 }] })
+    const answer = JSON.stringify({ name: 'Read, then hunt bugs', purpose: 'Two readers explain the files, then one hunts bugs', labels: ['Parser reader', 'Lexer reader', 'Bug hunter'],
+      roles: [{ label: 'Reader', role: 'Explains one source file' }, { label: 'Bug hunter', role: 'Lists bugs across both files' }], playbook: [] })
+    const r = applyReading(d(), checkReading(answer, trace(), d()), trace())
+    expect(r.roles.map(x => [x.label, x.role])).toEqual([['Reader', 'Explains one source file'], ['Bug hunter', 'Lists bugs across both files']])
+    expect(r.read).toBe('done')
+  })
+  test('a role label past 16 characters is dropped, never cut: the role keeps its type for a label, and its line', () => {
+    const answer = JSON.stringify({ roles: [{ label: 'Source file reader', role: 'Explains one source file' }, { label: 'Bug hunter', role: 'Lists bugs across both files' }] })
+    expect(checkReading(answer, trace(), d())!.roles).toEqual([{ label: 'Explore', role: 'Explains one source file' }, { label: 'Bug hunter', role: 'Lists bugs across both files' }])
+  })
+  test('the request lists each role with its count and the agents that filled it, and asks for one label and one line per role, each limit stated', () => {
+    const q = readingRequest(d(), trace())
+    expect(q.prompt).toContain('Agents, in order. Give 3 labels, one per agent, in this order. Each label names the job the agent did, at most 16 characters; a longer one is dropped.\n'
+      + '1. Describe parser.ts — brief: Write docs/api.md\n')
+    expect(q.prompt).toContain('Roles, in order. Give 2 roles, one per role, in this order, each as {"label", "role"}. '
+      + 'label: a name for the job its agents did, at most 16 characters, not its type. role: one line on what they did, at most 90 characters. A longer one is dropped.\n'
+      + '1. Explore, ran 2×, agents 1, 2\n2. general-purpose, ran 1×, agents 3')
   })
 })
 
@@ -1785,8 +1852,9 @@ describe('editing a draft', () => {
     const roles = applyOps({ ...x(), form: 'roles' }, [{ op: 'set', item: 0, field: 'role', value: 'Writes the docs' }, { op: 'remove', item: 1 },
       { op: 'skills', item: 0, add: ['a', 'b'] }, { op: 'skills', item: 0, remove: ['a'] }, { op: 'set', item: 2, field: 'teammate', value: true },
       { op: 'add', item: { label: 'Linter', type: 'general-purpose', role: 'Lints each change', model: 'haiku' } }])
+    // Two roles of one type, told apart by their labels.
     expect(roles.roles.map(r => [r.label, r.role, r.skills, r.teammate])).toEqual([['general-purpose', 'Writes the docs', ['b'], false],
-      ['general-purpose', '', [], true], ['Linter', 'Lints each change', [], false]])
+      ['general 2', '', [], true], ['Linter', 'Lints each change', [], false]])
     expect(roles.roles[2]).toMatchObject({ model: 'haiku', ran: 0, tools: {} })
     expect(roles.stages).toEqual(x().stages) // the other form is left as it was
   })
@@ -2053,7 +2121,14 @@ describe('the library', () => {
     expect(runText('Docs', ' only the store \n')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only the store')
   })
 
+  const NOT_THEIRS = "It is not one of Claude Code's saved workflows, so don't look it up by name: start the agents below with the Agent tool, or write a Workflow script from them."
   const OPENING = 'It is how this kind of work was led and staffed before: start from it, and fit it to this problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem. If an agent type or skill is not available here, go without it and say so.'
+
+  test("right after its first line, the plan says it is not one of Claude Code's saved workflows, so Claude never looks it up by name", () => {
+    const plan = planText({ ...emptySaved, name: 'Notes review', form: 'lineup', stages: [{ agents: [{ ...savedAgent, label: 'Docs' }] }] }, {}, {})
+    expect(plan.split('\n').slice(0, 3)).toEqual(['Saved REDhelm workflow "Notes review".',
+      "It is not one of Claude Code's saved workflows, so don't look it up by name: start the agents below with the Agent tool, or write a Workflow script from them.", OPENING])
+  })
 
   test('the Roles plan, whole', () => {
     const w: SavedWorkflow = { ...emptySaved, name: 'Build, check, review', purpose: 'Parallel implementers, then your checks and a separate review', form: 'roles',
@@ -2068,6 +2143,7 @@ describe('the library', () => {
       stages: [{ agents: [{ ...savedAgent, label: 'Not in Roles' }] }] }
     expect(planText(w, { 'store-reviewer': 'redhelm:store-reviewer', 'store-scout': 'general-purpose' }, { 'store-reviewer': ['permissionMode', 'hooks'] })).toBe([
       'Saved REDhelm workflow "Build, check, review": Parallel implementers, then your checks and a separate review.',
+      NOT_THEIRS,
       OPENING,
       '',
       'Lead: use the redmanager and tdd skills to run this.',
@@ -2088,7 +2164,7 @@ describe('the library', () => {
       '- Linter: subagent_type general-purpose. Tools it used: none. Also give it: Bash. Skills: none.',
     ].join('\n'))
     expect(planText({ ...w, lead: { skills: ['a', 'b', 'c'], playbook: [], briefParts: [] }, roles: [] }, {}, {})).toBe(
-      `Saved REDhelm workflow "Build, check, review": Parallel implementers, then your checks and a separate review.\n${OPENING}\n\nLead: use the a, b and c skills to run this.`)
+      `Saved REDhelm workflow "Build, check, review": Parallel implementers, then your checks and a separate review.\n${NOT_THEIRS}\n${OPENING}\n\nLead: use the a, b and c skills to run this.`)
   })
 
   test('the Lineup plan, whole', () => {
@@ -2104,6 +2180,7 @@ describe('the library', () => {
     expect(planText(w, { 'store-reviewer': 'redhelm:store-reviewer', 'store-linter': 'general-purpose' },
       { 'store-reviewer': ['hooks', 'mcpServers', 'permissionMode'], 'store-linter': ['hooks'] })).toBe([
       'Saved REDhelm workflow "Docs, then a review".',
+      NOT_THEIRS,
       OPENING,
       '',
       'Stage 1, start together:',
@@ -2344,6 +2421,8 @@ describe('saving a workflow', () => {
     expect(asked[0].prompt).toMatch(/#2 lead started general-purpose · sonnet/)
     const report = (await $.command.run({ command: 'redhelm', args: 'models', origin: { kind: 'person' }, presentation: {} } as any)).text
     expect(report).toMatch(/: 1 request, /)
+    // Labels are off, and the line still counts the reading: it says what it counts.
+    expect(report).toMatch(/\nREDhelm's own model calls \(labels: off; workflows: Sonnet, low effort\): 1 request, /)
     await ui.unmount()
   })
   test("an item's detail shows its brief, Remove drops it, and Save as Roles saves the roles", async ($: any, on: any) => {
