@@ -2082,8 +2082,8 @@ describe('the library', () => {
       'Staff it with these roles, as many of each as the work needs:',
       '- Implementer: Builds one slice in its own worktree. subagent_type general-purpose, model opus, isolation worktree, background. Tools it used: Edit, Bash, Read. Skills: none. Ran 7 times.',
       '  It started its own team: Writer (general-purpose, sonnet, ran 3 times), Scout (general-purpose, ran once; store-scout could not be added here). Ask it to staff its work that way.',
-      '- Reviewer: API checks. subagent_type redhelm:store-reviewer (its hooks and permission mode stayed behind), model sonnet, effort high, teammate. Tools it used: Read. Skills: code-review. Ran once.',
-      '- Linter: subagent_type general-purpose. Tools it used: none. Skills: none.',
+      '- Reviewer: API checks. subagent_type redhelm:store-reviewer (its hooks and permission mode stayed behind), model sonnet, effort high, teammate. Tools it used: Read. Also give it: Grep. Skills: code-review. Ran once.',
+      '- Linter: subagent_type general-purpose. Tools it used: none. Also give it: Bash. Skills: none.',
     ].join('\n'))
     expect(planText({ ...w, lead: { skills: ['a', 'b', 'c'], playbook: [], briefParts: [] }, roles: [] }, {}, {})).toBe(
       `Saved REDhelm workflow "Build, check, review": Parallel implementers, then your checks and a separate review.\n${OPENING}\n\nLead: use the a, b and c skills to run this.`)
@@ -2106,7 +2106,7 @@ describe('the library', () => {
       '',
       'Stage 1, start together:',
       '- Docs: subagent_type general-purpose, name docs, model sonnet, effort medium, background',
-      '  Tools it used: Read 9, Edit 5. Skills it used: none.',
+      '  Tools it used: Read 9, Edit 5. Also give it: Bash. Skills it used: none.',
       '  Brief:',
       '  Write the docs.',
       '',
@@ -2127,6 +2127,18 @@ describe('the library', () => {
       '  Brief:',
       '  Lint it',
     ].join('\n'))
+  })
+
+  test('a tool you added with ✎ never ran: the plan still asks for it, after the tools that did', () => {
+    const lineup = (tools: Record<string, number>) => planText({ ...emptySaved, form: 'lineup', stages: [{ agents: [{ ...savedAgent, tools }] }] }, {}, {})
+    const roles = (tools: Record<string, number>) => planText({ ...emptySaved, form: 'roles', roles: [{ ...role, tools }] }, {}, {})
+    expect(lineup({ Read: 2, WebFetch: 0 })).toContain('\n  Tools it used: Read 2. Also give it: WebFetch. Skills it used: none.')
+    expect(lineup({ WebFetch: 0, Grep: 0 })).toContain('\n  Tools it used: none. Also give it: WebFetch, Grep. Skills it used: none.')
+    // A role names its tools without counts, as spec §8 does.
+    expect(roles({ Read: 2, WebFetch: 0 })).toContain(' Tools it used: Read. Also give it: WebFetch. Skills: none.')
+    expect(roles({ WebFetch: 0 })).toContain(' Tools it used: none. Also give it: WebFetch. Skills: none.')
+    expect(lineup({ Read: 2 })).not.toContain('Also give it')
+    expect(roles({})).not.toContain('Also give it')
   })
 
   test('an agent file in each YAML form it may take', () => {

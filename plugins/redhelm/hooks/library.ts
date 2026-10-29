@@ -671,8 +671,16 @@ function settings(x: SavedAgent | SavedRole, h: Here) {
     x.isolation && `isolation ${x.isolation}`, x.background && 'background', x.teammate && 'teammate'].filter(Boolean).join(', ')
 }
 
-/** The tools it used, most used first. A tool an edit added never ran, so it is left out. */
-const toolsUsed = (tools: Readonly<Record<string, number>>) => Object.entries(tools).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
+/**
+ * "Tools it used: …" with the tools that ran, most used first (with their counts in a lineup), or
+ * none; then, when there are any, "Also give it: …" with the tools you added with ✎, which never ran.
+ */
+function toolsLine(tools: Readonly<Record<string, number>>, counts: boolean) {
+  const all = Object.entries(tools)
+  const used = all.filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([t, n]) => (counts ? `${t} ${n}` : t))
+  const added = all.filter(([, n]) => !(n > 0)).map(([t]) => t)
+  return `Tools it used: ${used.join(', ') || 'none'}.${added.length ? ` Also give it: ${added.join(', ')}.` : ''}`
+}
 
 /** The roles its own agents filled, as one line; undefined when it started none. */
 function teamLine(team: readonly SavedRole[] | undefined, h: Here) {
@@ -687,16 +695,15 @@ function teamLine(team: readonly SavedRole[] | undefined, h: Here) {
 
 /** A role that never ran (an edit added it) leaves out how many times it ran. */
 function roleItem(r: SavedRole, h: Here) {
-  const line = [r.role.trim() && sentence(r.role.trim()), `${settings(r, h)}.`, `Tools it used: ${toolsUsed(r.tools).map(([t]) => t).join(', ') || 'none'}.`,
-    `Skills: ${r.skills.join(', ') || 'none'}.`, r.ran > 0 && `Ran ${times(r.ran)}.`].filter(Boolean).join(' ')
+  const line = [r.role.trim() && sentence(r.role.trim()), `${settings(r, h)}.`, toolsLine(r.tools, false), `Skills: ${r.skills.join(', ') || 'none'}.`,
+    r.ran > 0 && `Ran ${times(r.ran)}.`].filter(Boolean).join(' ')
   const team = teamLine(r.team, h)
   return `- ${r.label}: ${line}${team ? `\n  ${team}` : ''}`
 }
 
 /** An agent of the lineup, its brief whole under it, each line indented as the item is. */
 function agentItem(a: SavedAgent, h: Here) {
-  const tools = toolsUsed(a.tools).map(([t, n]) => `${t} ${n}`)
-  const lines = [`- ${a.label}: ${settings(a, h)}`, `  Tools it used: ${tools.join(', ') || 'none'}. Skills it used: ${a.skills.join(', ') || 'none'}.`]
+  const lines = [`- ${a.label}: ${settings(a, h)}`, `  ${toolsLine(a.tools, true)} Skills it used: ${a.skills.join(', ') || 'none'}.`]
   const team = teamLine(a.team, h)
   if (team) lines.push(`  ${team}`)
   const brief = a.brief.replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
