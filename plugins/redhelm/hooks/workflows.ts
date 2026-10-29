@@ -648,17 +648,26 @@ function perItem<T>(v: unknown, n: number, check: (x: unknown, k: number) => T |
   return got.some(x => x !== undefined) ? got.map((x, k) => x ?? seen(k)) : undefined
 }
 
+/** Numbers written as words, by their digits. Not "one" or "once": they mostly mean "each". */
+const WORD_NUMBERS: Record<string, string> = {
+  two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12',
+  twice: '2', thrice: '3', dozen: '12',
+}
+const NUMBER = new RegExp(`\\d+|\\b(?:${Object.keys(WORD_NUMBERS).join('|')})\\b`, 'gi')
+
+/** The numbers a text holds, each as its digits: `three` and `3` are one number. */
+const numbersIn = (text: string) => (text.match(NUMBER) ?? []).map(k => WORD_NUMBERS[k.toLowerCase()] ?? k.replace(/^0+(?=\d)/, ''))
+
 /** Whether each number in a practice is one a cited prompt of yours holds: no rounds, workers or attempts you never asked for. */
 function backed(text: string, cited: readonly TraceEvent[]) {
-  if (!/\d/.test(text)) return true
-  const said = new Set(cited.flatMap(e => e.yours?.match(/\d+/g) ?? []))
-  return (text.match(/\d+/g) ?? []).every(k => said.has(k))
+  const said = new Set(cited.flatMap(e => (e.yours ? numbersIn(e.yours) : [])))
+  return numbersIn(text).every(k => said.has(k))
 }
 
 /**
  * The model's answer, checked against what REDhelm saw; anything that fails is dropped. Lengths; one
  * label per agent and one entry per role, in order; a practice must cite steps of the trace (never the
- * line counting those left out), and a number in it must be in a cited prompt of yours; at most eight.
+ * line counting those left out), and a number in it, in digits or words, must be in a cited prompt of yours; at most eight.
  * Undefined when the answer is missing, does not parse or is all dropped.
  */
 export function checkReading(text: string | undefined, trace: readonly TraceEvent[], d: Draft): Reading | undefined {

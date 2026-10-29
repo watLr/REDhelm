@@ -1683,6 +1683,16 @@ describe('the reading', () => {
     expect(checkReading(JSON.stringify({ name: 'x'.repeat(41), labels: [], roles: [], playbook: [] }), t, d())).toBeUndefined()
     expect(checkReading('Sorry, I cannot read this.', t, d())).toBeUndefined()
   })
+  test('a number in words is a number too: it survives only when a cited prompt of yours holds it', () => {
+    const p = (doing: string, evidence: number[]) => checkReading(reply({ playbook: [{ when: 'When a review fails', do: doing, evidence }] }), trace(), d())!.playbook
+    expect(p('review three rounds', [2])).toEqual([])
+    expect(p('review twice', [2])).toEqual([])
+    expect(p('Review Three rounds', [2])).toEqual([]) // any case
+    expect(p('start one reader per file', [2])).toHaveLength(1) // "one" mostly means "each"
+    expect(p('review often', [2])).toHaveLength(1) // whole words: "often" holds no "ten"
+    expect(p('review again, three rounds at most', [1])).toHaveLength(1) // your prompt said "3 rounds"
+    expect(p('Three rounds at most, then stop', [1])).toHaveLength(1)
+  })
   test('a reading without a name is named from its labels; a fallback name is cut to 40 at a word', () => {
     expect(applyReading(d(), checkReading(reply({ name: undefined }), trace(), d()), trace())).toMatchObject({ name: 'Docs, Tests', read: 'done' })
     const four = readWorkflow({ msgs: [you('go'), lead(call('a1', { description: 'Review the whole store' }), call('a2', { description: 'Check every type here' }),
