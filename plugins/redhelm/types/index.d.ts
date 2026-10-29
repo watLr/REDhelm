@@ -37,6 +37,17 @@ export type Agent = {
   /** What the headline was written from (labels.headlineKey) and when: it changes only when the work did, at most every 45 seconds. */
   headlineFor?: string
   headlineAt?: number
+  /** The built-in workflow run that started it (`wf_…`). */
+  run?: string
+  /** The agent that started it; absent when the main conversation did. */
+  parent?: string
+  teammate?: boolean
+  /** Where its type comes from: `project`, `user`, a plugin id, or `engine` for a built-in. */
+  origin?: string
+  /** Its tool calls by tool, an MCP tool under `mcp:<server>`; absent on records from before REDhelm kept them. */
+  tools?: Record<string, number>
+  /** The skills it loaded, once each, in order. */
+  skills?: string[]
 }
 
 export type Phase = 'exploring' | 'building' | 'checking' | 'delegating'

@@ -1393,3 +1393,44 @@ describe('labels from the small model', () => {
   })
 })
 
+/**
+ * A plugin beside REDhelm that hands a test REDhelm's agent records: a test's own `$` has no `$.state`,
+ * and the host lets a hook read state only from a scanned hooks module, which the test's `on` is not.
+ */
+const RECORDS = {
+  name: 'records',
+  register(on: any) {
+    on('tool.call', async ($: any, e: any, next: any) =>
+      e.tool === 'RedhelmRecords' ? { result: (await $.state.get({ plugin: 'redhelm', key: 'agents' })).value } : next(e))
+  },
+}
+
+describe('workflow records', () => {
+  const agents = async ($: any) => (await $.tool.call({ tool: 'RedhelmRecords' } as any)).result
+  test('an agent of a built-in workflow run is still working past the 20-second grace', { plugins: [RECORDS] }, async ($: any, on: any) => {
+    on('agent.list', () => ({ value: [] })) // Claude Code's list never names a run's agents
+    on('turn.complete', () => ({ text: '' }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Probe the parser', subagentType: 'general-purpose', workflow: { runId: 'wf_1', agentIndex: 1 } } as any)
+    await clock.advance(25_000)
+    expect((await agents($)).a1.status).toBe('running')
+    expect((await agents($)).a1.run).toBe('wf_1')
+    await $.turn.complete({ answer: 'done', durationMs: 9000, isAborted: false, turnId: 't1', agentId: 'a1', reason: 'answer' })
+    expect((await agents($)).a1.status).toBe('completed')
+  })
+  test('tools are counted per agent, MCP tools by server, skills once each in order', { plugins: [RECORDS] }, async ($: any, on: any) => {
+    await engine(on, true)($)
+    await spawn($)
+    for (const call of [{ tool: 'Read', file_path: 'a' }, { tool: 'Read', file_path: 'b' }, { tool: 'mcp__notes__search', q: 'x' },
+      { tool: 'Skill', skill: 'tdd' }, { tool: 'Skill', skill: 'tdd' }, { tool: 'Skill', skill: 'brainstorming' }])
+      await $.tool.call({ ...call, agentId: 'a1' } as any)
+    const a = (await agents($)).a1
+    expect(a.tools).toEqual({ Read: 2, 'mcp:notes': 1, Skill: 3 })
+    expect(a.skills).toEqual(['tdd', 'brainstorming'])
+  })
+  test('a spawn records its parent, whether it is a teammate and where its type comes from', { plugins: [RECORDS] }, async ($: any, on: any) => {
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Scout', subagentType: 'Explore', parentAgentId: 'lead1', isTeammate: true, provider: { plugin: 'project', tier: 'user' } } as any)
+    expect((await agents($)).a1).toMatchObject({ parent: 'lead1', teammate: true, origin: 'project' })
+  })
+})

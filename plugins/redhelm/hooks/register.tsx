@@ -86,6 +86,9 @@ async function note($: $, n: Omit<Note, 'at'>) {
   await update($, notes, list => [...list, { ...n, at }].slice(-40))
 }
 
+/** The name an agent's tool calls are counted under: an MCP tool by its server, `mcp:notes`. */
+const toolKey = (tool: string) => (tool.startsWith('mcp__') ? `mcp:${tool.split('__')[1]}` : tool)
+
 /** What an agent is called in REDhelm's messages and in the "→ name:" address. */
 const labelOf = (a?: Agent) => a?.name || excerpt(a?.description, 24) || a?.type || 'agent'
 
@@ -173,9 +176,10 @@ async function sync($: $) {
     }
     // Claude Code drops an agent from its list once it is done; one REDhelm still shows as live,
     // gone from the list past a short grace, has finished (no ghosts "running" for hours).
+    // A workflow run's agents are never listed: each ends on its own turn.complete instead.
     const listed = new Set(list.map(i => i.id))
     for (const a of Object.values(next)) {
-      if (LIVE.has(a.status) && !listed.has(a.id) && at - a.startedAt > GRACE_MS) {
+      if (LIVE.has(a.status) && !a.run && !listed.has(a.id) && at - a.startedAt > GRACE_MS) {
         next[a.id] = { ...a, status: 'completed', endedAt: a.endedAt ?? at, activity: undefined }
       }
     }
@@ -1013,6 +1017,8 @@ export const register: Register = (on, options) => {
         await patch($, id, () => ({
           model: r.model, type: e.subagentType, name: e.name ?? '', description: e.description, status: 'running',
           brief: tidy(e.prompt).slice(0, 2000),
+          // Every spawn names its provider; a host that left it out still gets the rest of the record.
+          run: e.workflow?.runId, parent: e.parentAgentId, teammate: e.isTeammate === true, origin: e.provider?.plugin,
         }))
         await note($, { kind: 'spawn', text: `${e.name || e.description}  ${short(r.model)}`, agentId: id })
         await show($)
@@ -1071,12 +1077,15 @@ export const register: Register = (on, options) => {
     await quietly(() => {
       const file = changedFile(e.tool, input)
       const path = file && relative(file, root)
+      const key = toolKey(e.tool)
       return patch($, id, a => ({
         waitingOn: undefined,
         steps: [{ text: activity(e.tool, input), at: now }, ...(a.steps ?? [])].slice(0, 8),
         activity: activity(e.tool, input),
         recent: [...a.recent, kindOf(e.tool)].slice(-8),
         ...(path && { files: [...a.files.filter(f => f !== path), path].slice(-30), edits: a.edits + 1 }),
+        tools: { ...a.tools, [key]: (a.tools?.[key] ?? 0) + 1 },
+        ...(e.tool === 'Skill' && e.skill && !a.skills?.includes(e.skill) && { skills: [...(a.skills ?? []), e.skill] }),
       }))
     })
     const ran = await next(e)
