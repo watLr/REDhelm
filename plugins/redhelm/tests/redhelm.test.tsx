@@ -12,8 +12,8 @@ import { label, rack, relevant, shortName, summary, type View } from '../hooks/v
 import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail } from '../hooks/trace'
 import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
-import { agentCalls, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readWorkflow, runCalls, sharedParts, stagesOf, stretches,
-  teamOf, widen, type Msg } from '../hooks/workflows'
+import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
+  READING_CALL, READING_SYSTEM, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -1624,5 +1624,69 @@ describe('reading a session', () => {
     expect(d.stages[1]!.agents[0]!.team).toBeUndefined()
     expect(d.roles.map(r => r.team?.map(t => t.type))).toEqual([['Explore']])
     expect(d).toMatchObject({ project: 'notes-app', projectKey: hash('/Users/x/notes-app/'), types: [], notCopied: [], evidence: [], folded: [] })
+  })
+})
+
+describe('the reading', () => {
+  const d = () => readWorkflow({ msgs: [you('Build the store, 3 rounds of review at most'), lead(call('a1'), call('a2', { description: 'Add tests' }))],
+    records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p/notes-app', lead: {} })!
+  const trace = () => leadTrace([you('Build the store, 3 rounds of review at most'), lead(call('a1'), call('a2'))], { from: 0, to: 2, led: false })
+  const reply = (over: any = {}) => JSON.stringify({ name: 'Docs and tests', purpose: 'Writes docs and tests together', labels: ['Docs', 'Tests'],
+    roles: [{ label: 'Writer', role: 'Writes one part' }], playbook: [{ when: 'When parts are independent', do: 'start writers together', evidence: [2] }], ...over })
+  test('a good reading fills names, roles and the playbook, with evidence lines', () => {
+    const r = applyReading(d(), checkReading(reply(), trace(), d()), trace())
+    expect(r).toMatchObject({ name: 'Docs and tests', read: 'done', roles: [{ label: 'Writer', role: 'Writes one part' }] })
+    expect(r.stages[0]!.agents.map(a => a.label)).toEqual(['Docs', 'Tests'])
+    expect(r.evidence).toEqual([['#2 lead started 2 × general-purpose together']])
+  })
+  test('a practice citing no real step is dropped', () => {
+    expect(checkReading(reply({ playbook: [{ when: 'Always', do: 'x', evidence: [99] }, { when: 'Always', do: 'y', evidence: [] }] }), trace(), d())!.playbook).toEqual([])
+  })
+  test('a number survives only when a cited prompt of yours holds it', () => {
+    const p = (evidence: number[]) => checkReading(reply({ playbook: [{ when: 'When a review fails', do: 'review again, 3 rounds at most', evidence }] }), trace(), d())!.playbook
+    expect(p([2])).toEqual([])
+    expect(p([1])).toHaveLength(1)
+  })
+  test('more than eight practices are cut to eight; lengths are enforced', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ when: `When step ${'abcdefghij'[i]}`, do: 'go', evidence: [2] }))
+    expect(checkReading(reply({ playbook: many }), trace(), d())!.playbook).toHaveLength(8)
+    expect(checkReading(reply({ name: 'x'.repeat(41) }), trace(), d())!.name).toBeUndefined()
+    expect(checkReading(reply({ labels: ['Docs'] }), trace(), d())!.labels).toBeUndefined() // one per agent, or none
+  })
+  test('a failed reading falls back and says so; a fenced answer still parses', () => {
+    const r = applyReading(d(), checkReading(undefined, trace(), d()), trace())
+    expect(r).toMatchObject({ read: 'failed', name: 'Write the docs, Add tests', purpose: '', lead: { playbook: [] } })
+    expect(checkReading('```json\n' + reply() + '\n```', trace(), d())?.name).toBe('Docs and tests')
+  })
+  // Beyond the plan's tests: the rules it states but does not pin.
+  test('the request gives the steps, the lead skills, the start of a script and of each brief, and how many labels and roles', () => {
+    const draft = readWorkflow({ msgs: [you('go'), lead(call('a1', { prompt: `Line one\n\n${'p'.repeat(400)}` }), call('a2', { description: 'Add tests' }))],
+      records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p', lead: {} })!
+    const q = readingRequest({ ...draft, lead: { ...draft.lead, skills: ['redmanager'] } }, [...trace(), { n: 0, line: '… 5 earlier steps left out' }], 's'.repeat(7000))
+    expect(q.system).toBe(READING_SYSTEM)
+    expect(q.prompt).toContain('#1 you: "Build the store, 3 rounds of review at most"\n#2 lead started 2 × general-purpose together\n… 5 earlier steps left out\n')
+    expect(q.prompt).toContain('Lead skills: redmanager')
+    expect(q.prompt).toContain(`Workflow script:\n${'s'.repeat(6000)}\n`)
+    expect(q.prompt).not.toContain('s'.repeat(6001))
+    expect(q.prompt).toContain(`Give 2 labels, one per agent:\n1. Write the docs — brief: Line one ${'p'.repeat(291)}\n2. Add tests — brief: Write docs/api.md`)
+    expect(q.prompt).toContain('Give 1 role, one per role:\n1. general-purpose, ran 2×, agents 1, 2')
+    expect(READING_CALL).toEqual({ model: 'sonnet', effort: 'low', maxTokens: 1500, timeoutMs: 30_000 })
+  })
+  test('the line of steps left out is no step; a number must be one you said; one bad label falls back; nothing kept is no reading', () => {
+    const t = [...trace(), { n: 0, line: '… 5 earlier steps left out' }]
+    const c = (over: any) => checkReading(reply(over), t, d())!
+    expect(c({ playbook: [{ when: 'Always', do: 'x', evidence: [0] }] }).playbook).toEqual([])
+    expect(c({ playbook: [{ when: 'When a review fails', do: 'review again, 30 rounds at most', evidence: [1] }] }).playbook).toEqual([])
+    expect(c({ playbook: [{ when: 'Always', do: 'x', evidence: [2, 2, 99] }] }).evidence).toEqual([[2]])
+    expect(c({ labels: ['Docs', 'x'.repeat(17)] }).labels).toEqual(['Docs', 'Add tests'])
+    expect(c({ roles: [{ label: 'Writer', role: 'x'.repeat(91) }] }).roles).toEqual([{ label: 'Writer', role: '' }])
+    expect(checkReading(JSON.stringify({ name: 'x'.repeat(41), labels: [], roles: [], playbook: [] }), t, d())).toBeUndefined()
+    expect(checkReading('Sorry, I cannot read this.', t, d())).toBeUndefined()
+  })
+  test('a reading without a name is named from its labels; a fallback name is cut to 40 at a word', () => {
+    expect(applyReading(d(), checkReading(reply({ name: undefined }), trace(), d()), trace())).toMatchObject({ name: 'Docs, Tests', read: 'done' })
+    const four = readWorkflow({ msgs: [you('go'), lead(call('a1', { description: 'Review the whole store' }), call('a2', { description: 'Check every type here' }),
+      call('a3', { description: 'Write the new docs' }), call('a4', { description: 'Extra' }))], records: {}, teams: {}, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p', lead: {} })!
+    expect(applyReading(four, undefined, []).name).toBe('Review the whole, Check every type')
   })
 })

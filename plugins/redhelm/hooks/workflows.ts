@@ -1,11 +1,12 @@
-import type { Agent, Draft, SavedAgent, SavedRole } from '../types'
+import type { Agent, Draft, Practice, SavedAgent, SavedRole } from '../types'
 import { hash } from './labels'
 import { family } from './model'
 
 /**
  * Reading a session for Save: where its stretches begin, the skills the lead loaded, the agents it
  * started, the stages they ran in, the roles they filled, the brief parts they shared, and the lead's
- * steps as a numbered trace. Pure: the conversation and REDhelm's records in, a draft out.
+ * steps as a numbered trace; then the model's reading of it, checked against what was seen. Pure: the
+ * conversation and REDhelm's records in, a draft out.
  */
 
 export type Use = { tool: string; input: Record<string, unknown>; isError?: boolean; agentId?: string; result?: unknown }
@@ -242,12 +243,12 @@ const LABEL = 16
 /** The first `n` characters, never half of a character written as two. */
 const head = (text: string, n: number) => text.slice(0, n).replace(/[\uD800-\uDBFF]$/, '')
 
-/** A label from a description or a type: at most 16 characters, cut at a word where there is one. */
-function labelOf(text: string) {
+/** A label from a description or a type: at most 16 characters (or `n`), cut at a word where there is one. */
+function labelOf(text: string, n = LABEL) {
   const t = text.replace(/\s+/g, ' ').trim()
-  if (t.length <= LABEL) return t
-  const word = t.lastIndexOf(' ', LABEL)
-  return (word > 0 ? t.slice(0, word) : head(t, LABEL)).replace(/[\s,;:.·–—-]+$/, '') || head(t, LABEL)
+  if (t.length <= n) return t
+  const word = t.lastIndexOf(' ', n)
+  return (word > 0 ? t.slice(0, word) : head(t, n)).replace(/[\s,;:.·–—-]+$/, '') || head(t, n)
 }
 
 /** Tool counts added into `into`, by their own keys only: a tool named like an Object method still adds up. */
@@ -562,5 +563,157 @@ export function readWorkflow({ msgs, records, teams, list, back, root, lead }: R
     read: 'pending',
     back: widened,
     more: widened < list.length - 1,
+  }
+}
+
+// The reading
+
+/** One model call per Save reads the stretch: it names the workflow, its agents and roles, and the lead's playbook. */
+export const READING_CALL = { model: 'sonnet', effort: 'low', maxTokens: 1500, timeoutMs: 30_000 } as const
+
+export const READING_SYSTEM = [
+  'You read how a lead coding agent ran a piece of work, from a numbered list of its steps, and describe it for a saved workflow. Reply with JSON only:',
+  '{"name": "≤ 40 characters", "purpose": "one line, ≤ 90 characters", "labels": ["≤ 16 characters, one per agent, in order"], "roles": [{"label": "≤ 16 characters", "role": "one line, ≤ 90 characters"}], "playbook": [{"when": "≤ 120 characters", "do": "≤ 120 characters", "evidence": [step numbers]}]}',
+  "The playbook is how the lead orchestrated: how it started agents, what it did when they reported, what the person asked for. At most 8 practices. Each says when it applies, so a lead can tell when it does not fit another problem. Never a fixed number of rounds, workers or attempts unless the person's own prompt said it. Leave out what a listed lead skill already does. No file names, paths or project names. Cite the steps each practice comes from.",
+].join('\n')
+
+/** The longest a reading's values may be; a longer one is dropped, never cut. */
+const NAME = 40
+const PURPOSE = 90
+const ROLE = 90
+const PRACTICE = 120
+const PRACTICES = 8
+/** How much of a workflow script and of each brief the reading is given. */
+const SCRIPT = 6000
+const BRIEF = 300
+
+/** A step as the reading is given it and the sheet shows it. The line counting the steps left out is no step, so it has no number. */
+const row = (e: TraceEvent) => (e.n ? `#${e.n} ${e.line}` : e.line)
+
+const even = (text: string) => text.replace(/\s+/g, ' ').trim()
+
+const agentsOf = (d: Draft) => d.stages.flatMap(s => s.agents)
+
+/** A setup as roles group it, read from an agent or a role. */
+const setupKey = (x: { type: string; model?: string; effort?: string; isolation?: string }) => JSON.stringify([x.type, x.model, x.effort, x.isolation])
+
+/**
+ * What the reading is given: the trace, a row a step; the lead skills; a workflow script's first
+ * 6,000 characters; each agent's description and its brief's first 300; each role's setup and the
+ * agents that filled it; and how many labels and roles to give.
+ */
+export function readingRequest(d: Draft, trace: readonly TraceEvent[], script?: string): { system: string; prompt: string } {
+  const agents = agentsOf(d)
+  const parts = [`Steps:\n${trace.map(row).join('\n')}`, `Lead skills: ${d.lead.skills.join(', ') || 'none'}`]
+  if (script?.trim()) parts.push(`Workflow script:\n${head(script, SCRIPT)}`)
+  const agent = (a: SavedAgent, k: number) => `${k + 1}. ${even(a.description) || a.type}${a.brief.trim() ? ` — brief: ${head(even(a.brief), BRIEF)}` : ''}`
+  parts.push(`Agents, in order. Give ${plural(agents.length, 'label')}, one per agent:\n${agents.map(agent).join('\n')}`)
+  const role = (r: SavedRole, k: number) => {
+    const by = agents.flatMap((a, i) => (setupKey(a) === setupKey(r) ? [i + 1] : []))
+    return `${k + 1}. ${[r.type, r.model, r.effort, r.isolation].filter(Boolean).join(' · ')}, ran ${r.ran}×${by.length ? `, agents ${by.join(', ')}` : ''}`
+  }
+  parts.push(`Roles, in order. Give ${plural(d.roles.length, 'role')}, one per role:\n${d.roles.map(role).join('\n')}`)
+  return { system: READING_SYSTEM, prompt: parts.join('\n\n') }
+}
+
+/** What survived the checks. `evidence[k]`: the step numbers practice `k` cites. */
+export type Reading = { name?: string; purpose?: string; labels?: string[]; roles?: { label: string; role: string }[]; playbook: Practice[]; evidence: number[][] }
+
+/** The answer's object: from its first `{` to its last `}`, so a fenced or prefaced answer still parses. */
+function answerOf(text: string | undefined) {
+  if (!text) return undefined
+  try {
+    const o: unknown = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
+    return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const fieldsOf = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {})
+
+/** A text the reading gave, whitespace evened out to one line; undefined when it is not text, is empty or is longer than `n`. */
+function fits(v: unknown, n: number) {
+  const t = typeof v === 'string' ? even(v) : ''
+  return t && t.length <= n ? t : undefined
+}
+
+/**
+ * One item per agent or role, in order, or none: a list of another length is dropped whole. An item
+ * that fails its check falls back to what was seen; when every item fails, the list is dropped.
+ */
+function perItem<T>(v: unknown, n: number, check: (x: unknown, k: number) => T | undefined, seen: (k: number) => T): T[] | undefined {
+  if (!Array.isArray(v) || v.length !== n) return undefined
+  const got = v.map(check)
+  return got.some(x => x !== undefined) ? got.map((x, k) => x ?? seen(k)) : undefined
+}
+
+/** Whether each number in a practice is one a cited prompt of yours holds: no rounds, workers or attempts you never asked for. */
+function backed(text: string, cited: readonly TraceEvent[]) {
+  if (!/\d/.test(text)) return true
+  const said = new Set(cited.flatMap(e => e.yours?.match(/\d+/g) ?? []))
+  return (text.match(/\d+/g) ?? []).every(k => said.has(k))
+}
+
+/**
+ * The model's answer, checked against what REDhelm saw; anything that fails is dropped. Lengths; one
+ * label per agent and one entry per role, in order; a practice must cite steps of the trace (never the
+ * line counting those left out), and a number in it must be in a cited prompt of yours; at most eight.
+ * Undefined when the answer is missing, does not parse or is all dropped.
+ */
+export function checkReading(text: string | undefined, trace: readonly TraceEvent[], d: Draft): Reading | undefined {
+  const o = answerOf(text)
+  if (!o) return undefined
+  const agents = agentsOf(d)
+  const labels = perItem(o.labels, agents.length, x => fits(x, LABEL), k => agents[k]!.label)
+  const roles = perItem(
+    o.roles,
+    d.roles.length,
+    (x, k) => {
+      const e = fieldsOf(x)
+      const label = fits(e.label, LABEL)
+      const role = fits(e.role, ROLE)
+      return label || role ? { label: label ?? d.roles[k]!.label, role: role ?? d.roles[k]!.role } : undefined
+    },
+    k => ({ label: d.roles[k]!.label, role: d.roles[k]!.role }),
+  )
+  const steps = new Map(trace.filter(e => e.n >= 1).map(e => [e.n, e] as const))
+  const playbook: Practice[] = []
+  const evidence: number[][] = []
+  for (const x of Array.isArray(o.playbook) ? o.playbook : []) {
+    if (playbook.length === PRACTICES) break
+    const p = fieldsOf(x)
+    const when = fits(p.when, PRACTICE)
+    const act = fits(p.do, PRACTICE)
+    const cited = [...new Set(Array.isArray(p.evidence) ? p.evidence : [])].filter((k): k is number => typeof k === 'number' && steps.has(k))
+    if (!when || !act || !cited.length || !backed(`${when} ${act}`, cited.map(k => steps.get(k)!))) continue
+    playbook.push({ when, do: act })
+    evidence.push(cited)
+  }
+  const name = fits(o.name, NAME)
+  const purpose = fits(o.purpose, PURPOSE)
+  return name || purpose || labels || roles || playbook.length ? compact({ name, purpose, labels, roles, playbook, evidence }) : undefined
+}
+
+/**
+ * The draft with its reading: names, role lines, the playbook, and each practice's evidence as the
+ * steps it cites. Without one (the call failed, timed out or was all dropped), the fallbacks: the
+ * labels as seen, no purpose, roles by type, no playbook. A missing name is the first three labels.
+ */
+export function applyReading(d: Draft, r: Reading | undefined, trace: readonly TraceEvent[]): Draft {
+  const labels = r?.labels
+  const named = r?.roles
+  let k = 0
+  const stages = labels ? d.stages.map(s => ({ agents: s.agents.map(a => ({ ...a, label: labels[k++] ?? a.label })) })) : d.stages
+  const steps = new Map(trace.filter(e => e.n >= 1).map(e => [e.n, e] as const))
+  return {
+    ...d,
+    name: r?.name ?? labelOf(agentsOf({ ...d, stages }).slice(0, 3).map(a => a.label).join(', '), NAME),
+    purpose: r?.purpose ?? '',
+    lead: { ...d.lead, playbook: r?.playbook ?? [] },
+    roles: named ? d.roles.map((role, i) => ({ ...role, ...named[i] })) : d.roles,
+    stages,
+    evidence: r?.evidence.map(ns => ns.flatMap(n => (steps.has(n) ? [row(steps.get(n)!)] : []))) ?? [],
+    read: r ? 'done' : 'failed',
   }
 }
