@@ -26,6 +26,7 @@ Restart running sessions (`/restart`), then run `/redhelm` once to open it. Afte
 - **Agent sheet:** click an agent for its task, steps, files, model and last words, with **Message** and **Stop**
 - **Headlines:** a few words under each agent, from Claude Code's small model, or plain words if you prefer
 - **Model guard:** holds your prompt if Claude Code switches models on its own
+- **Workflows:** save how a session's agents were led and staffed, and run it again later from **Load**
 - **Two layouts:** a sidebar on the right, or a bar above the prompt (`/redhelm bottom`)
 - **Light and dark:** follows Claude Code's theme
 
