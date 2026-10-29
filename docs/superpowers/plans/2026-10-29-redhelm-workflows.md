@@ -320,7 +320,7 @@ test('readWorkflow fills both forms, the lead and the shared parts, and nothing 
 
 - [ ] **Step 2: Run the tests.** Expected to FAIL: the functions are undefined.
 - [ ] **Step 3: Implement.** Rules the tests do not fully pin:
-  - **Trace events:** `you: "<first 300>"`, `lead loaded skill <name>`, `lead started <k> × <type> · <model> · <isolation> together` (one line per setup in a message, leaving out missing parts), `lead started a workflow`, `lead ran <command>`, `lead sent a message to an agent`, `lead asked you a question`, `lead edited <k> files`, and `an agent finished` (from notices, the shape found in Task 1).
+  - **Trace events:** `you: "<first 300>"`, `lead loaded skill <name>`, `lead started <k> × <type> · <model> · <isolation> together` (one line per setup in a message, leaving out missing parts; for a single agent, `lead started <type> · <model> · <isolation>`, with no count and no `together`), `lead started a workflow`, `lead ran <command>`, `lead sent a message to an agent`, `lead asked you a question`, `lead edited <k> files`, and `an agent finished` (from notices, the shape found in Task 1).
   - The marker counts the steps left out.
   - Labels fall back to the description, cut to 16 characters at a word boundary. `project` is the last part of `root`. `projectKey` is `hash(root)`, the same function as `library.ts`'s `projectKey`.
   - `runCalls` takes records whose `run` matches a Workflow tool use's `result.runId` in `s`, in `startedAt` order. A brief equal to the placeholder from Task 1's finding 5 becomes `''`.
@@ -473,7 +473,7 @@ describe('editing a draft', () => {
 - Produces:
 
 ```ts
-export function slug(name: string): string                 // ASCII words joined with '-', ≤ 48; none: `workflow-<first 6 of hash>`
+export function slug(name: string): string                 // ASCII words joined with '-', ≤ 48; none: `workflow-<hash(name)>`
 export function uniqueName(name: string, taken: readonly string[]): string   // name, then "<name> 2", "<name> 3"…
 export const projectKey: (root: string) => string          // hash(root)
 export function toSaved(d: Draft, at: number, id: string): SavedWorkflow   // the draft already holds project and projectKey
@@ -495,7 +495,7 @@ export function agentSpec(definition: string): { spec: AgentSpecIn; leftBehind: 
 describe('the library', () => {
   test('slugs', () => {
     expect(slug('Tests, then a review')).toBe('tests-then-a-review')
-    expect(slug('Тесты ✓')).toMatch(/^workflow-[0-9a-z]{6}$/)
+    expect(slug('Тесты ✓')).toMatch(/^workflow-[0-9a-z]+$/)
     expect(uniqueName('Tests', ['Tests', 'Tests 2'])).toBe('Tests 3')
   })
   test('a saved file keeps only the chosen form and reads back', () => {
@@ -622,7 +622,7 @@ describe('saving a workflow', () => {
     expect(await ui.find({ type: 'Text', text: /Tests, then a review/ })).toBeDefined()
     expect((await ui.find({ key: 'wf-item-2' }))?.text).toMatch(/Review/)
     await ui.press({ key: 'wf-practice-0' })
-    expect(await ui.find({ type: 'Text', text: /#2 lead started 2 × general-purpose/ })).toBeDefined() // its evidence
+    expect(await ui.find({ type: 'Text', text: /#2 lead started general-purpose · sonnet/ })).toBeDefined() // its evidence
     await ui.unmount()
   })
   test('Save writes the chosen form only; a same name becomes "<name> 2"', async ($: any, on: any) => {
@@ -654,14 +654,14 @@ describe('saving a workflow', () => {
     await ui.unmount()
   })
   test('a reading that lands late is dropped', async ($: any, on: any) => {
-    let release: () => void = () => {}
+    const pending: (() => void)[] = [] // one release per reading, in the order they were asked
     setup(on, { said: [you('one'), lead(call('a1')), you('two'), lead(call('a2', { description: 'Add tests' }))],
-      answer: () => new Promise(r => (release = () => r({ value: { isAnswered: true, text: JSON.stringify({ name: 'Stale', labels: ['X'], roles: [], playbook: [] }), usage: {} } }))) })
+      answer: () => new Promise(r => pending.push(() => r({ value: { isAnswered: true, text: JSON.stringify({ name: 'Stale', labels: ['X'], roles: [], playbook: [] }), usage: {} } }))) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.press({ key: 'wf-save' }); await ui.press({ key: 'wf-earlier' }); release(); await settle()
+    await ui.press({ key: 'wf-save' }); await ui.press({ key: 'wf-earlier' }); pending[0]!(); await settle() // Save's reading, now stale
     expect(await ui.find({ type: 'Text', text: /Stale/ })).toBeUndefined()
-    await ui.press({ key: 'wf-cancel' }); release(); await settle()
+    await ui.press({ key: 'wf-cancel' }); pending[1]!(); await settle() // Earlier's reading, after Cancel
     expect(await ui.find({ type: 'Text', text: /^Save workflow$/ })).toBeUndefined()
     await ui.unmount()
   })
@@ -762,7 +762,7 @@ Copy, exact:
     - Drop at once.
     - After 100 ms, fill back `takeDraft`.
     - Set `busy`.
-    - Run the edit call with `parseEdit`, then `checkOps`, then `applyOps` (pushing to `undo`). A failure sets `error` to the reason, and `{ cannot }` sets it to the text.
+    - Run the edit call, counted in the label tallies, with `parseEdit`, then `checkOps`, then `applyOps` (pushing to `undo`). A failure sets `error` to the reason, and `{ cannot }` sets it to the text.
     - Clear `busy`. A second `✎` while busy waits on the first.
   - **`wfRun`:**
     1. `leaveReply`.
