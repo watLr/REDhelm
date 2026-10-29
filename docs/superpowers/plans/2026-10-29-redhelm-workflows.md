@@ -88,7 +88,7 @@ The answers decide how Tasks 3, 4, 8 and 9 recognise prompts, `/` skills, run ag
 - Test: `plugins/redhelm/tests/redhelm.test.tsx`, a new `describe('workflow records')`.
 
 **Interfaces:**
-- Produces: `Agent` gains `run?: string`, `parent?: string`, `teammate?: boolean`, `tools?: Record<string, number>` and `skills?: string[]`. Old records read as missing, so readers default to `{}`, `[]` and `false`.
+- Produces: `Agent` gains `run?: string`, `parent?: string`, `teammate?: boolean`, `origin?: string` (`e.provider.plugin`, added after Task 1), `tools?: Record<string, number>` and `skills?: string[]`. Old records read as missing, so readers default to `{}`, `[]` and `false`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -162,7 +162,7 @@ export type Draft = Omit<SavedWorkflow, 'version' | 'id' | 'savedAt'> & {
 
 ```ts
 export type Use = { tool: string; input: Record<string, unknown>; isError?: boolean; agentId?: string; result?: unknown }
-export type Msg = { role: 'user' | 'assistant'; text: string; toolUses: readonly Use[] }
+export type Msg = { role: 'user' | 'assistant'; text: string; toolUses: readonly Use[]; toolResults?: readonly unknown[] }
 export type AgentInput = { description: string; prompt: string; subagent_type?: string; model?: string; effort?: string; name?: string; run_in_background?: boolean; isolation?: 'worktree' | 'remote' }
 /** Message indexes, `to` exclusive; `led`: a lead skill loaded before its first agent. */
 export type Stretch = { from: number; to: number; led: boolean }
@@ -187,9 +187,10 @@ const lead = (...toolUses: any[]): Msg => ({ role: 'assistant', text: '', toolUs
 const call = (agentId: string, input: Record<string, unknown> = {}) =>
   ({ tool: 'Agent', agentId, input: { description: 'Write the docs', prompt: 'Write docs/api.md', subagent_type: 'general-purpose', ...input } })
 const skill = (name: string) => ({ tool: 'Skill', input: { skill: name } })
-// Shapes from Task 1's findings 1 and 2; these are the assumed ones until then.
-const notice = (text: string): Msg => ({ role: 'user', text: `<task-notification>${text}</task-notification>`, toolUses: [] })
-const slash = (name: string): Msg => ({ role: 'user', text: `<command-name>/${name}</command-name>`, toolUses: [] })
+// Shapes seen in Task 1 (findings 1 and 2).
+const notice = (text: string): Msg => ({ role: 'user', text: `<task-notification> <task-id>a1</task-id> ${text} </task-notification>`, toolUses: [] })
+const slash = (name: string): Msg => ({ role: 'user', text: `<command-message>${name}</command-message> <command-name>/${name}</command-name>`, toolUses: [] })
+const result = (): Msg => ({ role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't', text: 'Async agent launched successfully.' }] })
 
 describe('reading a session', () => {
   test('stretches split at your prompts that started agents; a skill that led keeps the rest whole', () => {
@@ -201,12 +202,21 @@ describe('reading a session', () => {
   })
   test('notifications are not your prompts', () => {
     expect(isPrompt(notice('agent a1 finished'))).toBe(false)
+    expect(isPrompt(result())).toBe(false)
+    expect(isPrompt(you('[Request interrupted by user]'))).toBe(false)
+    expect(isPrompt(slash('probe-skill'))).toBe(true)
     expect(isPrompt(you('hi'))).toBe(true)
     expect(stretches([you('go'), lead(call('a1', { run_in_background: true })), notice('done'), lead(call('a2'))])).toHaveLength(1)
   })
   test('lead skills come from the Skill tool and from / commands, once each, in order', () => {
     const msgs = [slash('redmanager'), lead(skill('brainstorming'), skill('redmanager')), lead(call('a1'))]
     expect(leadSkills(msgs, { from: 0, to: 3, led: true })).toEqual(['redmanager', 'brainstorming'])
+    // A / command the model never answered (a built-in like /effort) is not a skill.
+    expect(leadSkills([slash('effort'), you('go'), lead(call('a1'))], { from: 0, to: 3, led: false })).toEqual([])
+  })
+  test('one lead message is a run of assistant messages; a tool result between two calls splits it', () => {
+    const msgs = [you('go'), lead(call('a1')), lead(call('a2', { description: 'Add tests' })), result(), result(), lead(call('a3', { description: 'Review' }))]
+    expect(stagesOf(agentCalls(msgs, { from: 0, to: 6, led: false }), {}).map(st => st.map(c => c.agentId))).toEqual([['a1', 'a2'], ['a3']])
   })
   test('one lead message is one stage; started while another runs joins it; started after all ended opens the next', () => {
     const records = { a1: agent({ id: 'a1', startedAt: 0, endedAt: 50 }), a2: agent({ id: 'a2', startedAt: 0, endedAt: 90 }),
@@ -242,6 +252,9 @@ describe('reading a session', () => {
   - A stretch boundary is a prompt (`isPrompt`) followed by at least one `agentCalls` entry before the next such prompt. A `led` stretch absorbs every later one.
   - A repeat is the same `subagent_type` plus the same `name`, or the same `subagent_type` plus the same `description`, as a call in an *earlier* stage. `folded.label` is the description.
   - A missing `subagent_type` reads as `general-purpose`.
+  - **A lead message** is a run of consecutive assistant messages with no user message between them. Claude Code stores each content block as its own message, and a tool result is a user message (Task 1, finding 1).
+  - **`isPrompt`:** a user message with text, no `toolResults`, and text that does not start with `<task-notification>`, `<local-command`, `<system-reminder>` or `[Request interrupted`. A `<command-message>` text is a prompt.
+  - **A `/` skill** is a prompt whose text holds `<command-name>/<name></command-name>` and whose next message is an assistant message (Task 1, finding 2).
 - [ ] **Step 4: Run the tests and the typecheck.** Both pass.
 - [ ] **Step 5: Commit:** `git commit -m "Workflows: read a session's stretches, lead skills and lineup"`.
 
@@ -323,7 +336,7 @@ test('readWorkflow fills both forms, the lead and the shared parts, and nothing 
   - **Trace events:** `you: "<first 300>"`, `lead loaded skill <name>`, `lead started <k> × <type> · <model> · <isolation> together` (one line per setup in a message, leaving out missing parts; for a single agent, `lead started <type> · <model> · <isolation>`, with no count and no `together`), `lead started a workflow`, `lead ran <command>`, `lead sent a message to an agent`, `lead asked you a question`, `lead edited <k> files`, and `an agent finished` (from notices, the shape found in Task 1).
   - The marker counts the steps left out.
   - Labels fall back to the description, cut to 16 characters at a word boundary. `project` is the last part of `root`. `projectKey` is `hash(root)`, the same function as `library.ts`'s `projectKey`.
-  - `runCalls` takes records whose `run` matches a Workflow tool use's `result.runId` in `s`, in `startedAt` order. A brief equal to the placeholder from Task 1's finding 5 becomes `''`.
+  - `runCalls` takes records whose `run` matches a Workflow tool use's `result.runId` in `s`, in `startedAt` order. Their type `workflow-subagent` is saved as `general-purpose`, because the Agent tool cannot start it (Task 1, finding 5). Their brief is REDhelm's record (its first 2,000 characters).
   - `types: []`; Task 8 fills them.
 - [ ] **Step 4: Run the tests and the typecheck.** Both pass.
 - [ ] **Step 5: Commit:** `git commit -m "Workflows: roles, teams, shared brief parts and the lead trace"`.
@@ -677,9 +690,8 @@ describe('saving a workflow', () => {
     - The lead model and effort come from `GUARD`.
     - Call `readWorkflow` with `back: 0`.
     - Copy types:
-      - A type with no `:` is looked for in `<root>/.claude/agents/`, recursively, by `typeName`, using Task 1's finding 7.
-      - Found → `types`. Found but unreadable → `notCopied`.
-      - Found only under `~/.claude/agents/` → name only.
+      - The agent's record `origin` (Task 2) decides. `project`: look for the file in `<root>/.claude/agents/`, recursively, by `typeName`. Found → `types`; not found or unreadable → `notCopied`.
+      - Any other origin (`user`, a plugin id, `engine`), or no record: name only.
     - Set the sheet with a new `token`. If reading the messages throws, set `error` to `Couldn't read this session`.
     - Start the reading: count it in the label tallies. Apply the answer only when the sheet's `token` is unchanged.
     - The reading runs whatever the `labels` setting is; that setting is for dashboard labels.
@@ -801,3 +813,21 @@ Copy, exact:
 ## Findings (Task 1 writes these)
 
 Task 1 records each answer here, numbered as in the spec's "To check first" list, with the rule it gives and the task it changes.
+
+Probe run: Claude Code 2.1.312, Haiku 5.5, sample project `/Users/Shared/notes-app`, 96 main messages, 14 agents.
+
+1. **Non-prompt user messages.** A tool result is `{ role: 'user', text: '', toolResults: [...] }`. A background agent's finish is `{ role: 'user', text: '<task-notification> <task-id>…</task-id> <tool-use-id>…</tool-use-id> …' }`. Each assistant content block is its own message: a call, then its result, then the next call. → Task 3: the `isPrompt` rule and the "lead message is a run of assistant messages" rule.
+2. **A `/` skill** is `{ role: 'user', text: '<command-message>probe-skill</command-message> <command-name>/probe-skill</command-name>' }`, followed by assistant messages. The Skill tool's use has `input.skill`, and its result has `commandName`. Claude also loaded `workflow-authoring` by itself before a Workflow call: a helper, which `Save as` corrects. Mod commands (`/wfprobe`) leave no message. → Task 3: the `/` skill rule and the `slash` fixture.
+3. **`agentId`** is on every Agent tool use, background ones included. The result also carries `isAsync`, `status`, `resolvedModel`, `prompt` and `outputFile`. → No change.
+4. **A `prompt.submit` `context` entry** reached the model: asked for the code word, it answered `HELM-7`. A rewritten `text` is what the transcript keeps (`Run my saved REDhelm workflow "Probe".`), and the context never shows. → No change.
+5. **Workflow-run agents:**
+   - At `agent.spawn` they have `subagentType: 'workflow-subagent'`, `provider: engine/core`, `workflow: { runId: 'wf_…', agentIndex }`, `background: false`, the script's label as `description` (`read:src/notes.js`), and the real prompt. A local run has no placeholder.
+   - The Workflow use's input is `{ script }`. Its result is `{ status, taskId, taskType, workflowName, runId, summary, transcriptDir, scriptPath }`.
+   - → Task 4: `runCalls` saves them as `general-purpose`.
+6. **Plan shapes.** Roles: Claude started two Explore readers on haiku, waited for both, then one general-purpose reviewer on haiku. Lineup: stage 1's two agents, then stage 2 after both finished. Both shapes were followed as written. → No change.
+7. **Agent types.**
+   - A project agent in a subfolder (`.claude/agents/team/probe-local.md`) was found and dispatched.
+   - `provider` names the source: `{ plugin: 'project', tier: 'user' }` for the project's own, `{ plugin: 'user', tier: 'user' }` for a personal one, `{ plugin: 'wfprobe@inline', tier: 'user' }` for a plugin's, and `{ plugin: 'engine', tier: 'core' }` for built-ins.
+   - Name versus file name was not told apart (they matched).
+   - → Task 2 records `origin`; Task 8 copies only `origin: 'project'`, looking recursively by `typeName`.
+8. **A type registered by a command** (`$.agent.register` → `{ agent: 'wfprobe:probe-reviewer' }`) was dispatched by the next prompt's Agent call. → No change; Run registering before your Enter is enough.
