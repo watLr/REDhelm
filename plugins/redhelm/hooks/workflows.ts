@@ -55,30 +55,38 @@ function acts(msgs: readonly Msg[], i: number): (string | Use)[] {
 
 const end = (msgs: readonly Msg[], to: number) => Math.min(to, msgs.length)
 
-/** Whether the lead loaded a skill before the first agent it started between `from` and `to`. */
-function led(msgs: readonly Msg[], from: number, to: number) {
-  let skill = false
+/** The message of the first skill the lead loaded before the first agent it started between `from` and `to`, if it did. */
+function loadBefore(msgs: readonly Msg[], from: number, to: number) {
+  let load: number | undefined
   for (let i = from; i < end(msgs, to); i++)
     for (const a of acts(msgs, i)) {
-      if (typeof a !== 'string') return skill
-      skill = true
+      if (typeof a !== 'string') return load
+      load ??= i
     }
-  return false
+  return undefined
 }
 
 /**
  * Your prompts split the session: a stretch begins at a prompt after which the lead started an agent,
- * and holds your prompts after it that started none. A stretch a skill led runs to the end.
+ * and holds your prompts after it that started none. A skill loaded since the stretch before started
+ * its agents, and before this one's first, leads: the stretch begins at your prompt before that load
+ * and runs to the end.
  */
 export function stretches(msgs: readonly Msg[]): Stretch[] {
   const prompts = msgs.flatMap((m, i) => (isPrompt(m) ? [i] : []))
   const starts = prompts.filter((from, k) => agentCalls(msgs, { from, to: prompts[k + 1] ?? msgs.length, led: false }).length > 0)
   const out: Stretch[] = []
-  for (const [k, from] of starts.entries()) {
+  for (const [k, start] of starts.entries()) {
     const next = starts[k + 1] ?? msgs.length
-    const byLead = led(msgs, from, next)
-    out.push({ from, to: byLead ? msgs.length : next, led: byLead })
-    if (byLead) break
+    // The first prompt after the stretch before's agents: a skill loaded earlier was loaded inside it.
+    const gap = k ? prompts[prompts.indexOf(starts[k - 1]!) + 1]! : prompts[0]!
+    const load = loadBefore(msgs, gap, next)
+    const from = load === undefined ? start : prompts.findLast(p => p <= load)!
+    const led = load !== undefined
+    const before = out[out.length - 1]
+    if (before) before.to = from
+    out.push({ from, to: led ? msgs.length : next, led })
+    if (led) break
   }
   return out
 }
@@ -166,5 +174,5 @@ export function foldRepeats(stages: readonly Call[][]): { stages: Call[][]; fold
 
 /** Roles when a skill loaded before the first agent: that skill led the team. Otherwise the lineup as it ran. */
 export function defaultForm(msgs: readonly Msg[], s: Stretch): 'roles' | 'lineup' {
-  return led(msgs, s.from, s.to) ? 'roles' : 'lineup'
+  return loadBefore(msgs, s.from, s.to) === undefined ? 'lineup' : 'roles'
 }

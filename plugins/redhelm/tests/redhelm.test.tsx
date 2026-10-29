@@ -1454,6 +1454,11 @@ describe('reading a session', () => {
     const led = [you('Plan the build'), lead(skill('redmanager')), lead(call('a1')), you('go on'), lead(call('a2'))]
     expect(stretches(led)).toEqual([{ from: 0, to: 5, led: true }])
   })
+  test('a skill loaded in your prompts before the agents leads from the prompt before the load', () => {
+    const msgs = [you('Build the store'), lead(call('a1')), slash('redmanager'), lead(), you('approved'), lead(call('a2', { description: 'Add tests' }))]
+    expect(stretches(msgs)).toEqual([{ from: 0, to: 2, led: false }, { from: 2, to: 6, led: true }])
+    expect(defaultForm(msgs, stretches(msgs)[1]!)).toBe('roles')
+  })
   test('notifications are not your prompts', () => {
     expect(isPrompt(notice('agent a1 finished'))).toBe(false)
     expect(isPrompt(result())).toBe(false)
