@@ -10,9 +10,10 @@ import { appearance, grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstA
 import { workspaces, type Io } from '../hooks/sources'
 import { label, rack, relevant, shortName, summary, type View } from '../hooks/view'
 import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail } from '../hooks/trace'
-import { clean, labeler, type Complete } from '../hooks/labels'
+import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
-import { agentCalls, defaultForm, foldRepeats, isPrompt, leadSkills, stagesOf, stretches, widen, type Msg } from '../hooks/workflows'
+import { agentCalls, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readWorkflow, runCalls, sharedParts, stagesOf, stretches,
+  teamOf, widen, type Msg } from '../hooks/workflows'
 
 const agent = (over: Partial<Agent>): Agent => ({
   id: 'a1', name: 'docs', type: 'general-purpose', description: 'Rewrite the setup guide', status: 'running',
@@ -1502,5 +1503,110 @@ describe('reading a session', () => {
   test('the default form is Roles when a skill loaded before the first agent', () => {
     expect(defaultForm([you('go'), lead(skill('redmanager')), lead(call('a1'))], { from: 0, to: 3, led: true })).toBe('roles')
     expect(defaultForm([you('go'), lead(call('a1')), lead(skill('status-board'))], { from: 0, to: 3, led: false })).toBe('lineup')
+  })
+  test('roles group by type, model, effort and isolation; ran counts them; tools sum', () => {
+    const records = { a1: agent({ id: 'a1', tools: { Edit: 3 } }), a2: agent({ id: 'a2', tools: { Edit: 1, Bash: 2 }, skills: ['tdd'] }) }
+    const msgs = [you('go'), lead(call('a1', { model: 'opus', isolation: 'worktree' }), call('a2', { model: 'opus', isolation: 'worktree' }), call('a3', { subagent_type: 'reviewer', model: 'sonnet' }))]
+    const roles = groupRoles(agentCalls(msgs, { from: 0, to: 2, led: false }), records)
+    expect(roles.map(r => [r.type, r.model, r.isolation, r.ran])).toEqual([['general-purpose', 'opus', 'worktree', 2], ['reviewer', 'sonnet', undefined, 1]])
+    expect(roles[0]).toMatchObject({ tools: { Edit: 4, Bash: 2 }, skills: ['tdd'], label: 'general-purpose' })
+  })
+  test("an agent's own agents become its team, one level down", () => {
+    const team = teamOf([lead(call('b1', { subagent_type: 'Explore' }), call('b2', { subagent_type: 'Explore' }))], {})
+    expect(team?.map(r => [r.type, r.ran])).toEqual([['Explore', 2]])
+    expect(teamOf([], {})).toBeUndefined()
+  })
+  test('a paragraph most briefs share is kept verbatim; one in a single brief is not', () => {
+    const report = 'STATUS: DONE | BLOCKED\nCHANGED: <files>'
+    expect(sharedParts([`Write the docs.\n\n${report}`, `Add tests.\n\n${report}`, 'Review it.'])).toEqual([report])
+    expect(sharedParts(['one\n\nonly here', 'two'])).toEqual([])
+    expect(sharedParts([`a\n\n${'x'.repeat(1501)}`, `b\n\n${'x'.repeat(1501)}`])).toEqual([])
+  })
+  test('commands keep the program and subcommand only', () => {
+    expect(command('cd app && FOO=1 npm test -- --watch')).toBe('npm test')
+    expect(command('git commit -m "token=abc"')).toBe('git commit')
+    expect(command('ls -la /p')).toBe('ls')
+  })
+  test('the lead trace is one numbered line a step', () => {
+    const msgs = [you('Build the store'), lead(skill('brainstorming')), lead(call('a1', { model: 'opus', isolation: 'worktree' }), call('a2', { model: 'opus', isolation: 'worktree' })),
+      lead({ tool: 'Bash', input: { command: 'npm test' } }, { tool: 'SendMessage', input: { to: 'a1', message: 'fix' } }),
+      lead({ tool: 'AskUserQuestion', input: {} }, { tool: 'Bash', input: { command: 'git commit -m x' } })]
+    expect(leadTrace(msgs, { from: 0, to: 5, led: false }).map(e => `#${e.n} ${e.line}`)).toEqual([
+      '#1 you: "Build the store"', '#2 lead loaded skill brainstorming', '#3 lead started 2 × general-purpose · opus · worktree together',
+      '#4 lead ran npm test', '#5 lead sent a message to an agent', '#6 lead asked you a question', '#7 lead ran git commit'])
+  })
+  test('a long stretch keeps the first 20 and the last 180 steps', () => {
+    const msgs = [you('go'), ...Array.from({ length: 300 }, () => lead({ tool: 'Bash', input: { command: 'npm test' } }))]
+    const t = leadTrace(msgs, { from: 0, to: msgs.length, led: false })
+    expect(t).toHaveLength(201)
+    expect(t[20]!.line).toBe('… 101 earlier steps left out')
+  })
+  test('readWorkflow fills both forms, the lead and the shared parts, and nothing read yet', () => {
+    const d = readWorkflow({ msgs: [you('go'), lead(call('a1'), call('a2', { description: 'Add tests' }))], records: {}, teams: {},
+      list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p/notes-app', lead: { model: 'claude-opus-5-5' } })!
+    expect(d).toMatchObject({ form: 'lineup', project: 'notes-app', read: 'pending', back: 0, more: false, lead: { skills: [], playbook: [], model: 'claude-opus-5-5' } })
+    expect(d.stages[0]!.agents.map(a => a.label)).toEqual(['Write the docs', 'Add tests'])
+    expect(d.roles).toHaveLength(1)
+    expect(readWorkflow({ msgs: [you('hi')], records: {}, teams: {}, list: [], back: 0, root: '/p', lead: {} })).toBeUndefined()
+  })
+  // Beyond the plan's tests: the rules it states but does not pin.
+  test("a workflow run's agents come from records, in start order, as general-purpose, placed in stages by time", () => {
+    const records = {
+      w2: agent({ id: 'w2', run: 'wf_1', type: 'workflow-subagent', description: 'read:b', brief: 'Read b', startedAt: 20, endedAt: 30, model: 'claude-haiku-5-5' }),
+      w1: agent({ id: 'w1', run: 'wf_1', type: 'workflow-subagent', description: 'read:a', brief: 'Read a', startedAt: 10, endedAt: 15 }),
+      w9: agent({ id: 'w9', run: 'wf_other', startedAt: 5 }),
+      w3: agent({ id: 'w3', run: 'wf_1', parent: 'w1', startedAt: 12 }), // w1's own: it counts only in w1's tools
+    }
+    // Shapes seen in Task 1: the run's result names its task, and the run's finish is a notice of that task.
+    const finished: Msg = { role: 'user', text: '<task-notification>\n<task-id>ws1</task-id>\n<summary>Dynamic workflow "read" completed</summary>\n</task-notification>', toolUses: [] }
+    const msgs = [you('go'), lead({ tool: 'Workflow', input: { script: 'agent(…)' }, result: { status: 'async_launched', taskId: 'ws1', runId: 'wf_1', workflowName: 'read', scriptPath: '/s.js' } }),
+      result(), finished, notice('done')]
+    const s = { from: 0, to: msgs.length, led: false }
+    expect(runCalls(msgs, s, records).map(c => [c.agentId, c.input.subagent_type, c.input.prompt])).toEqual([['w1', 'general-purpose', 'Read a'], ['w2', 'general-purpose', 'Read b']])
+    const d = readWorkflow({ msgs, records, teams: {}, list: [s], back: 0, root: '/p', lead: {} })!
+    // Their script started them, not the lead message: w1 ended before w2 started, so two stages.
+    expect(d.stages.map(st => st.agents.map(a => a.description))).toEqual([['read:a'], ['read:b']])
+    expect(d.roles.map(r => [r.type, r.model, r.ran])).toEqual([['general-purpose', undefined, 1], ['general-purpose', 'haiku', 1]])
+    expect(leadTrace(msgs, s).map(e => e.line)).toEqual(['you: "go"', 'lead started a workflow', 'a workflow finished', 'an agent finished'])
+  })
+  test('the trace tells one agent, a finished agent, edits, a workflow and your / command apart', () => {
+    const edit = (file_path: string) => ({ tool: 'Edit', input: { file_path } })
+    const msgs = [you('Fix it\n\nplease'), lead(call('a1', { subagent_type: 'Explore', model: 'haiku' }), { ...call('a9'), isError: true }), result(), notice('done'),
+      lead(edit('/p/a.ts')), result(), lead(edit('/p/b.ts')), result(), lead(edit('/p/a.ts')), lead({ ...edit('/p/c.ts'), isError: true }),
+      slash('redmanager'), lead(), lead({ tool: 'Bash', input: { command: '' } })]
+    const t = leadTrace(msgs, { from: 0, to: msgs.length, led: false })
+    expect(t.map(e => e.line)).toEqual(['you: "Fix it please"', 'lead started Explore · haiku', 'an agent finished', 'lead edited 2 files',
+      'you: "/redmanager"', 'lead ran a command'])
+    expect(t.map(e => e.yours)).toEqual(['Fix it\n\nplease', undefined, undefined, undefined, '/redmanager', undefined])
+  })
+  test('the steps left out are numbered 0, so no practice can cite them; the rest keep their numbers', () => {
+    const msgs = [you('go'), ...Array.from({ length: 300 }, () => lead({ tool: 'Bash', input: { command: 'npm test' } }))]
+    const t = leadTrace(msgs, { from: 0, to: msgs.length, led: false })
+    expect([t[19]!.n, t[20]!.n, t[21]!.n, t[200]!.n]).toEqual([20, 0, 122, 301])
+  })
+  test('shared parts: whitespace evened out to compare, at most three, each as first written', () => {
+    expect(sharedParts(['Rules:  keep   it\n  short.\n\nx', 'Rules: keep it short.\n\ny'])).toEqual(['Rules:  keep   it\n  short.'])
+    expect(sharedParts(['a\n\nb\n\nc\n\nd', 'd\n\nc\n\nb\n\na'])).toEqual(['a', 'b', 'c'])
+    expect(sharedParts(['same\n\nsame', 'other'])).toEqual([])
+    expect(sharedParts(['Report: DONE', 'Report: DONE', '', '', ' '])).toEqual(['Report: DONE'])
+  })
+  test('commands drop paths, file arguments and quoted values', () => {
+    expect(command('/usr/local/bin/node server.js')).toBe('node')
+    expect(command('FOO="a b" pytest tests/ -k x')).toBe('pytest')
+    expect(command('npm test\nnpm run lint')).toBe('npm test')
+    expect(command('cd /p')).toBe('cd')
+  })
+  test("readWorkflow: each agent and role gets its own team; labels cut at a word; Earlier while there is one before", () => {
+    const msgs = [you('one'), lead(call('a1', { description: 'Review the whole store module' })), you('two'), lead(call('a2', { description: 'Add tests' }))]
+    const list = stretches(msgs)
+    const read = (back: number) => readWorkflow({ msgs, records: {}, teams: { a1: [lead(call('b1', { subagent_type: 'Explore' }))] }, list, back, root: '/Users/x/notes-app/', lead: {} })!
+    expect([read(0).more, read(1).more]).toEqual([true, false])
+    expect(read(0).stages.map(st => st.agents.map(a => a.label))).toEqual([['Add tests']])
+    const d = read(1)
+    expect(d.stages.map(st => st.agents.map(a => a.label))).toEqual([['Review the whole'], ['Add tests']])
+    expect(d.stages[0]!.agents[0]!.team?.map(r => [r.type, r.ran])).toEqual([['Explore', 1]])
+    expect(d.stages[1]!.agents[0]!.team).toBeUndefined()
+    expect(d.roles.map(r => r.team?.map(t => t.type))).toEqual([['Explore']])
+    expect(d).toMatchObject({ project: 'notes-app', projectKey: hash('/Users/x/notes-app/'), types: [], notCopied: [], evidence: [], folded: [] })
   })
 })
