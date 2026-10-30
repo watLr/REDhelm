@@ -239,8 +239,12 @@ async function sync($: $) {
 /** The labels the model picks between; the first means the agent waits on you. */
 const ASKS = ['asks the person a question or for a decision', 'reports or informs, needs no answer'] as const
 
-/** Whether a message waits on an answer: the session's small model reads it; its words alone decide when it cannot. */
+/**
+ * Whether a message waits on an answer: the session's small model reads it; its words alone decide when it
+ * cannot, and always with Labels plain, which asks the model nothing.
+ */
 async function isQuestion($: $, text: string) {
+  if (cfg.labels === 'plain') return looksLikeQuestion(text)
   const label = await $.model.classify(text, ASKS).catch(() => undefined)
   return label ? label === ASKS[0] : looksLikeQuestion(text)
 }

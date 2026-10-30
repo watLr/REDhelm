@@ -75,7 +75,7 @@
     "labels": {
       "type": "string",
       "title": "REDhelm labels",
-      "description": "Haiku: Claude Code's small model writes each working agent's headline and each question's short title (a few short requests while REDhelm is on screen). Plain: REDhelm's own words only.",
+      "description": "Haiku: Claude Code's small model writes each working agent's headline and each question's short title (a few short requests while REDhelm is on screen), and reads each message an agent sends you to tell a question from a report. Plain: REDhelm's own words only, and its wording check decides what is a question.",
       "options": [
         "haiku",
         "plain"

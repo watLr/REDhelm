@@ -85,7 +85,7 @@ The header counts them (`⚑ 1  ▶ 3  ✓ 2`). Finished agents fold into one li
 
 An agent that asks you something gets an amber-edged card with its question in a line, **Reply**, and **Details**. Reply fills your prompt with `→ name: `; type and press Enter, and it goes to that agent instead of Claude. Anything you were typing to Claude is kept and comes back after.
 
-REDhelm tells a question from a report: Claude Code's small model reads each message (with a plain check of the wording if it can't be reached). A report becomes the agent's last words instead of asking for you. A question clears once you or Claude answer it; one from an agent that has ended stays 30 minutes (a reply still reaches it), with **Dismiss** to put it away sooner.
+REDhelm tells a question from a report: Claude Code's small model reads each message (with a plain check of the wording if it can't be reached, or when **Labels** is plain). A report becomes the agent's last words instead of asking for you. A question clears once you or Claude answer it; one from an agent that has ended stays 30 minutes (a reply still reaches it), with **Dismiss** to put it away sooner.
 
 ### Everything about one agent
 
@@ -171,7 +171,7 @@ Every option is a row in `/config`:
 | Placement | right · bottom | right |
 | Background (sidebar, terminal) | ripples · lattice · field · ember · none | ripples |
 | Motion: traces move, a new question's edge flashes | on · off | on |
-| Labels: headlines and question titles | haiku · plain | haiku |
+| Labels: headlines, question titles, and telling a question from a report | haiku · plain | haiku |
 | Workflow reading: Save's reading and Edit | sonnet · off | sonnet |
 | When the model changes without you | hold · warn · off | hold |
 | REDhelm line under the prompt | off · problems · always | off |
@@ -218,7 +218,7 @@ REDhelm reads your project folder and Claude Code's own session data on your mac
 
 - **Update check.** A few times a day it reads REDhelm's published version number from GitHub. It sends nothing about you or your work. Only a copy installed from REDhelm's own marketplace checks.
 - **Labels.** While REDhelm is on screen, it asks Claude Code's small model (Haiku, low effort) for short headlines and question titles. Each request carries an agent's task (first 300 characters), its latest steps and words, or a question an agent asked. It goes through Claude Code, to the same provider as the rest of your session, and counts toward your usage: a few hundred tokens each. One request at a time; an agent's headline is asked for again only when its steps change, at most every 45 seconds; no more than 30 requests an hour; answers are reused. `/redhelm models` shows what labels used. Set **Labels** to plain to turn them off.
-- **Questions.** Each message an agent sends to the main conversation is read once by Claude Code's small model, to tell a question from a report. The request carries the message, with your project and home folder paths shortened. It goes through Claude Code like the labels and counts toward your usage, whatever the **Labels** setting.
+- **Questions.** Each message an agent sends to the main conversation is read once by Claude Code's small model, to tell a question from a report. The request carries the message, with your project and home folder paths shortened. It goes through Claude Code like the labels and counts toward your usage, but `/redhelm models` cannot count it: Claude Code returns no usage for this kind of request. Set **Labels** to plain to turn it off too; REDhelm's wording check then decides.
 - **Workflows.** Only when you ask; set **Workflow reading** to off to turn them off. **Save** (and each **Earlier**) makes one request to Claude Code's Sonnet (low effort): it carries your prompts and each agent's brief at their first 300 characters, each agent's description, the skills the lead loaded, its steps (a command as its program and subcommand only), and the first 6,000 characters of any workflow script it ran. Each edit you send makes one more Sonnet request, carrying the draft with its briefs and shared brief parts whole (up to 6,000 characters each) and what you asked. Both go through Claude Code like the labels, count toward your usage, and are counted in `/redhelm models`.
 
 No analytics, no telemetry, no server of REDhelm's own; nothing is sold or shared. A saved workflow affects a later session only when you press **Run**, and then the whole plan is in your prompt. REDhelm runs only in interactive sessions (`claude -p`, the SDK and other headless runs are left alone), and if it ever errors, the call it was watching goes through unchanged.

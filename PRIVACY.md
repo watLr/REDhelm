@@ -37,7 +37,7 @@ REDhelm writes no file into your project.
 - **The update check.** Only a copy installed from REDhelm's own marketplace checks. It reads REDhelm's published version number from GitHub (`raw.githubusercontent.com`), shortly after a session starts and every six hours; one check serves all your open sessions for an hour. The request carries nothing about you or your work. GitHub receives it as it receives any web request. A copy from another marketplace, such as the plugin directory, or from a local folder, never checks. When you press **Update** or run `/redhelm update`, REDhelm runs Claude Code's own plugin update, which downloads the new version from the marketplace.
 - **Model calls.** REDhelm asks Claude Code's models for a few things. Each request goes through Claude Code, with your session's own credentials, to the same provider as the rest of your session, and counts toward your usage. REDhelm sends them nowhere else.
   - **Headlines and question titles** (Claude Code's small model, Haiku, at low effort), only while REDhelm is on screen. Each request carries an agent's task (its first 300 characters), its latest steps and words, or a question an agent asked. One request at a time, and no more than 30 an hour.
-  - **Telling a question from a report** (Claude Code's small model). Each message an agent sends to the main conversation is read once, to see whether it waits for your answer. The request carries the message, with your project and home folder paths shortened. It runs whatever the **Labels** setting.
+  - **Telling a question from a report** (Claude Code's small model). Each message an agent sends to the main conversation is read once, to see whether it waits for your answer. The request carries the message, with your project and home folder paths shortened. `/redhelm models` does not count it: Claude Code returns no usage for this kind of request.
   - **Workflow reading** (Sonnet, at low effort), only when you press **Save** or **Earlier**: one request each time. It carries your prompts and each agent's brief at their first 300 characters, each agent's description, the skills the lead loaded, the lead's steps (a command as its program and subcommand only), and the first 6,000 characters of any workflow script it ran.
   - **Workflow edits** (Sonnet, at low effort): one request for each change you send with **Edit**. It carries the draft, with its briefs and shared brief parts whole (up to 6,000 characters each), and what you asked for.
 
@@ -57,10 +57,10 @@ A saved workflow does nothing on its own. It affects a later session only when y
 
 ## Turning each part off
 
-- **Headlines and question titles:** set **Labels** to plain in `/config`.
+- **Headlines, question titles and the question check:** set **Labels** to plain in `/config`. REDhelm's own wording check then decides whether a message is a question.
 - **Workflow reading and edits:** set **Workflow reading** to off in `/config`. Save then keeps only what REDhelm saw, and Edit is not offered.
 - **A saved workflow:** open it from **Load** and press **Delete** twice, or remove its file from `~/.claude/redhelm/workflows/`.
-- **All of it:** disable or uninstall REDhelm (`claude plugin disable` or `claude plugin uninstall`). This also stops the update check and the question check, which have no setting of their own. REDhelm has no step that removes what it kept: delete `~/.claude/redhelm/`, and its status lines in `~/.claude/settings.json`, if you want them gone.
+- **All of it:** disable or uninstall REDhelm (`claude plugin disable` or `claude plugin uninstall`). This also stops the update check, which has no setting of its own. REDhelm has no step that removes what it kept: delete `~/.claude/redhelm/`, and its status lines in `~/.claude/settings.json`, if you want them gone.
 
 ## Headless runs
 

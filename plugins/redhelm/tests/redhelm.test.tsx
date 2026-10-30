@@ -1006,6 +1006,39 @@ describe('what an agent sends you', () => {
     await ui.unmount()
   })
 
+  test('with Labels plain the model reads no message: the wording decides', { options: { labels: 'plain' } } as any, async ($: any, on: any) => {
+    const classified: string[] = []
+    on('agent.list', () => ({ value: [docs] }))
+    on('session.send', () => ({ isDelivered: true }))
+    on('model.classify', (_$: any, e: any) => (classified.push(e.text), { value: e.labels[0] }))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    await $.session.send({ to: 'lead', text: 'The schema diff is written to docs/schema.md', agentId: 'a1' })
+    await clock.advance(100)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'ask-a1' })).toBeUndefined() // a report, though the model would have called it a question
+    await $.session.send({ to: 'lead', text: 'Should I keep the old schema?', agentId: 'a1' })
+    await clock.advance(100)
+    expect(await ui.find({ key: 'ask-a1' })).toBeDefined()
+    expect(classified).toEqual([])
+    await ui.unmount()
+  })
+
+  test('with Labels haiku the model reads each message', { options: { labels: 'haiku' } } as any, async ($: any, on: any) => {
+    const classified: string[] = []
+    on('agent.list', () => ({ value: [docs] }))
+    on('session.send', () => ({ isDelivered: true }))
+    on('model.classify', (_$: any, e: any) => (classified.push(e.text), { value: e.labels[0] }))
+    await engine(on, true)($)
+    await clock.advance(3_000)
+    await $.session.send({ to: 'lead', text: 'The schema diff is written to docs/schema.md', agentId: 'a1' })
+    await clock.advance(100)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'ask-a1' })).toBeDefined() // the model's word wins over the wording
+    expect(classified).toEqual(['The schema diff is written to docs/schema.md'])
+    await ui.unmount()
+  })
+
   test('without the model, a question mark or a plain request still counts; a URL query does not', () => {
     expect(looksLikeQuestion('Should I use blue or green?')).toBe(true)
     expect(looksLikeQuestion('Let me know which runner to use')).toBe(true)
