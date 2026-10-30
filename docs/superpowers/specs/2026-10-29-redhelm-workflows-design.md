@@ -541,3 +541,53 @@ from what an agent did (a written system prompt, a tool list from last time); co
 plugin's or a built-in type; carrying a type's hooks, MCP servers or permission mode; recurring
 runs (`/loop`, schedules); enforcing a saved model, skill or practice at run time; saving into
 the project or sharing; showing a run's progress against its workflow.
+
+## Changes made while building
+
+What the build decided beyond this spec, from a probe of Claude Code 2.1.312, the task reviews and a live check.
+
+**Reading the session**
+- Claude Code stores each content block as its own message, and a tool result is a user message. So a "lead message" is a run of assistant messages with nothing between them. Background agents, started one per message, group into a stage by timing instead.
+- These are not your prompts: tool results, `<task-notification>`, `<local-command`, `<system-reminder>`, `<bash-` and `[Request interrupted` messages. A `/` command counts as a skill only when the model answered it.
+- A skill loaded in the planning turn before the first agent (REDManager's intake, then your approval) leads the stretch from the prompt before that skill.
+- Each agent's `provider` names where its type comes from (`project`, `user`, a plugin id, `engine`), and REDhelm records it as `origin`. Save copies only `project` types. Without a record, it looks for the project's file by name.
+- A built-in workflow run's agents have the type `workflow-subagent`, which the Agent tool can't start. They are saved as `general-purpose`, with their model as a family alias and their brief as REDhelm recorded it (first 2,000 characters). They are placed in stages by timing.
+- For an agent REDhelm has no record of, Save reads the agent's own conversation for its tools, skills and team. Records keep only the 20 latest finished agents. A pruned run's agents stay out, because their conversations can't be read.
+- Commands keep only the program, plus a subcommand for git, npm, pnpm, yarn, bun, npx, bunx, deno, cargo, go, docker, kubectl, gh, claude and make. Wrappers such as sudo and env are skipped. A wrapper followed by a flag is named alone.
+- The trace says `a workflow finished` for a run's own notice. A one-agent start reads `lead started <type> · <model>`.
+
+**The reading**
+- The no-numbers check also catches number words: two to twelve, twice, thrice, dozen, but not one or once. A number matches its digits in a prompt you cited.
+- A list of the right length falls back item by item. Labels within one form are made distinct ("Describe", "Describe 2"). The request states each field's limit, after the live check found over-long role labels being dropped.
+- The step marker for steps left out is sent unnumbered and can't be cited.
+
+**Edit**
+- Op numbers refer to the draft as listed.
+- The edit call gets each brief and shared part whole, up to 6,000 characters each, because a find-and-replace needs the text.
+- An empty `ops` list changes nothing. Edit, Undo, Remove, Save, Earlier and Save as are refused while the reading or an edit is still out.
+- A hand-typed `✎ Workflow:` with no edit open says `REDhelm: press Edit first`.
+
+**Run**
+- The plan's opening says it is not one of Claude Code's saved workflows. In the live check, Claude first looked it up with the Workflow tool.
+- Tools added with ✎ reach the plan as "Also give it: …". Roles list tool names without counts.
+- A copied type that can't be added says so in the plan and falls back to `general-purpose`.
+
+**Agent types**
+- These are errors, never text: a block list (`|`, `>`), text after a closing quote, an empty `tools: []`, and a value that opens with a YAML indicator (anchor, alias, tag, `- ` on the key's line, and the like). A lost `disallowedTools` entry would widen what the agent may do.
+- Windows line endings read like Unix ones.
+- The parser lives in `hooks/agentfile.ts`.
+
+**The prompt box**
+- Only a prompt you typed answers ✎, ▶ or Reply. A notification or a peer's message never ends a mode or wipes a half-typed reply.
+- The model guard is asked before any mode ends, so a held prompt is never overwritten.
+- In the bottom bar, Edit closes the Workflows pane to hand over the keys and reopens it once the change lands. Esc still clears it.
+- Run ignores a second press while one is in flight. An open library list refreshes after a Save. Removing the last item, or saving an empty workflow, is not offered.
+
+**`/redhelm models`** now names REDhelm's own model calls, labels and workflows alike.
+
+**Known gaps**
+- A quoted whole-value list that opens with an indicator (`tools: "*"`) is rejected: the type falls back, saying so.
+- Save's local reads have no timeout.
+- A run agent whose `turn.complete` never comes (remote isolation, internal builds only) stays running.
+- The kept draft has one slot, as Reply's always has.
+- Not live-checked: the light theme and a 22-column sidebar.
