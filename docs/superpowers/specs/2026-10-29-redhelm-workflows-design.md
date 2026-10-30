@@ -28,8 +28,8 @@ REDhelm's reading of it, with the evidence one press away.
 - One person who ran a session with agents and wants that way of working again, in this project
   or another, with or without a process skill of their own.
 - REDhelm's surfaces as today: right sidebar, bottom bar, desktop, VS Code; mobile has no prompt box.
-- Claude Code 2.1.311 engine API: `$.session.messages()`, `$.prompt.fill`, `prompt.submit` with
-  `context`, `$.model.complete`, `$.agent.register`, `$.fs`.
+- Claude Code 2.1.311 engine API: `$.session.messages()`, `$.prompt.fill`, `prompt.submit`,
+  `$.model.complete`, `$.agent.register`, `$.fs`.
 - Nothing is saved inside the project. A saved workflow can carry real briefs, so it lives under `~/.claude`.
 
 ## 1. What a saved workflow holds
@@ -352,8 +352,8 @@ Enter starts.
 On Enter, the `prompt.submit` hook matches `▶ <name>: ` for the workflow that Run chose (kept
 in state, not parsed from the text), and rewrites the prompt:
 
-- `text`: ``Run my saved REDhelm workflow "<name>".`` plus ` My notes for this run: <notes>` when you wrote any.
-- `context`: the workflow as a plan, which you never see. Its parts, in order:
+- `text`: ``Run my saved REDhelm workflow "<name>".`` plus ` My notes for this run: <notes>` when you
+  wrote any, then a blank line and the workflow as a plan, written out in your prompt. Its parts, in order:
 
 ```
 Saved REDhelm workflow "<name>": <purpose>.
@@ -387,6 +387,9 @@ Stage 1, start together:                                            (Lineup)
 Stage 2, after stage 1 finishes:
 - …
 ```
+
+- `context`: passed on as it came. REDhelm adds nothing there, so the conversation shows
+  everything Claude got.
 
 Each `subagent_type` in the plan is the one that will work here: the type as saved, or
 `redhelm:<name>` where REDhelm registered the copy.
@@ -507,8 +510,8 @@ It has no heading in the sidebar, so nothing on screen changes.
 - **Ops:** each op applied; a bad one rejects the whole edit and keeps the draft; an op for the
   other form refused; `cannot` shown.
 - **Prompt box:** `✎` is dropped and never reaches Claude, and the draft comes back; `▶`
-  becomes the text plus a `context` plan with notes, in each shape (skill, playbook, Roles,
-  Lineup); deleting the mark ends either mode.
+  becomes the text with notes and the plan written out under it, in each shape (skill, playbook,
+  Roles, Lineup), and `context` passes as it came; deleting the mark ends either mode.
 - **Library:** save and read back; a same name becomes `<name> 2`; a bad file is skipped and
   counted; delete needs two presses.
 - **Types at Save:** a project type is copied once however many agents used it; built-in,
@@ -568,6 +571,7 @@ What the build decided beyond this spec, from a probe of Claude Code 2.1.312, th
 - A hand-typed `✎ Workflow:` with no edit open says `REDhelm: press Edit first`.
 
 **Run**
+- The plan is written out in your prompt, under the run line, and `context` is left as it came. Anthropic's plugin directory policy (§2.G) allows no hidden instructions: "All behavioral guidance must be human-readable and clearly presented." The conversation now shows everything Claude got.
 - The plan's opening says it is not one of Claude Code's saved workflows. In the live check, Claude first looked it up with the Workflow tool.
 - Tools added with ✎ reach the plan as "Also give it: …". Roles list tool names without counts.
 - A copied type that can't be added says so in the plan and falls back to `general-purpose`.

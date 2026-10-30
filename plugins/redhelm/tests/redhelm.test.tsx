@@ -2052,8 +2052,8 @@ describe('the library', () => {
     expect(r.unreadable).toBe(1)
   })
   test('the run text and each plan shape', () => {
-    expect(runText('Build: phase two', '')).toBe('Run my saved REDhelm workflow "Build: phase two".')
-    expect(runText('Docs', 'only src/store.js')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only src/store.js')
+    expect(runText('Build: phase two', '', 'The plan.')).toBe('Run my saved REDhelm workflow "Build: phase two".\n\nThe plan.')
+    expect(runText('Docs', 'only src/store.js', 'The plan.')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only src/store.js\n\nThe plan.')
     const roles = planText({ ...emptySaved, name: 'Build', form: 'roles', lead: { skills: ['redmanager'], playbook: [], briefParts: ['STATUS: DONE'] },
       roles: [{ ...role, label: 'Implementer', type: 'store-builder', ran: 7 }] }, { 'store-builder': 'redhelm:store-builder' }, {})
     expect(roles).toContain('Lead: use the redmanager skill to run this.')
@@ -2168,8 +2168,8 @@ describe('the library', () => {
   })
 
   test('notes are trimmed, and blank notes are none', () => {
-    expect(runText('Docs', '  \n ')).toBe('Run my saved REDhelm workflow "Docs".')
-    expect(runText('Docs', ' only the store \n')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only the store')
+    expect(runText('Docs', '  \n ', 'The plan.')).toBe('Run my saved REDhelm workflow "Docs".\n\nThe plan.')
+    expect(runText('Docs', ' only the store \n', 'The plan.')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only the store\n\nThe plan.')
   })
 
   const NOT_THEIRS = "It is not one of Claude Code's saved workflows, so don't look it up by name: start the agents below with the Agent tool, or write a Workflow script from them."
@@ -2648,6 +2648,13 @@ const PEEK = {
     })
   },
 }
+/** A plugin beside REDhelm that hands the model context of its own with each prompt, so a test sees REDhelm keep it and add none. */
+const BESIDE = {
+  name: 'beside',
+  register(on: any) {
+    on('prompt.submit', (_$: any, e: any, next: any) => next({ ...e, context: [...(e.context ?? []), 'from beside'] }))
+  },
+}
 const peek = async ($: any, key: 'workflowMode' | 'composing') =>
   (await $.tool.call({ tool: key === 'workflowMode' ? 'RedhelmMode' : 'RedhelmComposing' } as any)).result.value
 
@@ -2723,7 +2730,7 @@ describe('editing and running a workflow', () => {
     await ui.unmount()
   })
 
-  test('▶ becomes the run text plus a plan in context', async ($: any, on: any) => {
+  test('▶ becomes the run text with the plan written out under it, and context passes as it came', { plugins: [BESIDE] }, async ($: any, on: any) => {
     const box = promptBox(on, 'half a prompt')
     setup(on, { files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
     await engine(on, true)($)
@@ -2733,14 +2740,18 @@ describe('editing and running a workflow', () => {
     expect(box.text).toBe('▶ Tests, then a review: ')
     await $.prompt.submit({ text: '▶ Tests, then a review: only src/store.js' })
     expect(box.passed).toHaveLength(1)
-    expect(box.passed[0].text).toBe('Run my saved REDhelm workflow "Tests, then a review". My notes for this run: only src/store.js')
-    expect(box.passed[0].context[0]).toContain('Stage 1, start together:')
-    expect(box.passed[0].context[0]).toContain('Add tests for the store')
+    const [ask, plan] = box.passed[0].text.split(/\n\n(.*)/s)
+    expect(ask).toBe('Run my saved REDhelm workflow "Tests, then a review". My notes for this run: only src/store.js')
+    expect(plan).toMatch(/^Saved REDhelm workflow "Tests, then a review"\.\n/)
+    expect(plan).toContain('Stage 1, start together:')
+    expect(plan).toContain('Add tests for the store')
+    // What you see is all Claude gets: REDhelm adds nothing to the context, and keeps what another plugin put there.
+    expect(box.passed[0].context).toEqual(['from beside'])
     await clock.advance(200); await settle()
     expect(box.text).toBe('half a prompt') // your draft, once Claude Code took the prompt
     // The run is over: the mark typed again is your own text.
     await $.prompt.submit({ text: '▶ Tests, then a review: again' })
-    expect([box.passed[1].text, box.passed[1].context]).toEqual(['▶ Tests, then a review: again', undefined])
+    expect([box.passed[1].text, box.passed[1].context]).toEqual(['▶ Tests, then a review: again', ['from beside']])
     await ui.unmount()
   })
 
@@ -2753,12 +2764,12 @@ describe('editing and running a workflow', () => {
     await ui.press({ key: 'wf-run-build-phase-two' }); await settle()
     expect(box.text).toBe('▶ Build: phase two: ')
     await $.prompt.submit({ text: '▶ Build: phase two: only src/store.js' })
-    expect(box.passed[0].text).toBe('Run my saved REDhelm workflow "Build: phase two". My notes for this run: only src/store.js')
-    expect(box.passed[0].context[0]).toContain('Stage 1, start together:')
+    expect(box.passed[0].text).toMatch(/^Run my saved REDhelm workflow "Build: phase two"\. My notes for this run: only src\/store\.js\n\nSaved REDhelm workflow "Build: phase two"\.\n/)
+    expect(box.passed[0].text).toContain('Stage 1, start together:')
     // No notes: Enter at once.
     await ui.press({ key: 'wf-run-build-phase-two' }); await settle()
     await $.prompt.submit({ text: box.text })
-    expect(box.passed[1].text).toBe('Run my saved REDhelm workflow "Build: phase two".')
+    expect(box.passed[1].text).toMatch(/^Run my saved REDhelm workflow "Build: phase two"\.\n\nSaved REDhelm workflow /)
     await ui.unmount()
   })
 
@@ -2875,7 +2886,7 @@ describe('editing and running a workflow', () => {
     const run = async () => {
       await ui.press({ key: 'wf-run-review' }); await settle()
       await $.prompt.submit({ text: `${box.text}go` })
-      return box.passed.at(-1).context[0] as string
+      return box.passed.at(-1).text as string
     }
     let plan = await run()
     expect(registered).toHaveLength(1)
@@ -3095,7 +3106,7 @@ describe('editing and running a workflow', () => {
     await $.prompt.submit({ text: `${box.text}go` })
     expect(registered).toEqual([])
     expect(toasts).toEqual(["Couldn't add store-linter · No front matter"])
-    expect(box.passed[0].context[0]).toContain('- Lint: subagent_type general-purpose (store-linter could not be added here)')
+    expect(box.passed[0].text).toContain('- Lint: subagent_type general-purpose (store-linter could not be added here)')
     await ui.unmount()
   })
 
@@ -3114,7 +3125,7 @@ describe('editing and running a workflow', () => {
     await sw('picker', 'claude-fable-5-1')
     // The mode held: the same text sent again (the guard holds tools too, so the mode is read from what it does).
     await $.prompt.submit({ text: '▶ Tests, then a review: go' })
-    expect(box.passed.map(p => p.text)).toEqual(['Run my saved REDhelm workflow "Tests, then a review". My notes for this run: go'])
+    expect(box.passed.map(p => p.text.split('\n')[0])).toEqual(['Run my saved REDhelm workflow "Tests, then a review". My notes for this run: go'])
     await ui.unmount()
   })
 
@@ -3154,7 +3165,7 @@ describe('editing and running a workflow', () => {
     expect(box.text).toBe('▶ Tests, then a review: ') // never overwritten with the old draft
     await sw('picker', 'claude-fable-5-1')
     await $.prompt.submit({ text: '▶ Tests, then a review: go' }) // the run was still open
-    expect(box.passed.map(p => p.text)).toEqual(['Run my saved REDhelm workflow "Tests, then a review". My notes for this run: go'])
+    expect(box.passed.map(p => p.text.split('\n')[0])).toEqual(['Run my saved REDhelm workflow "Tests, then a review". My notes for this run: go'])
     await clock.advance(200); await settle()
     expect(box.text).toBe('half a prompt') // and its draft still kept
     // The same with a Reply open.

@@ -638,10 +638,13 @@ export function listed(files: readonly { name: string; text: string }[], key: st
 
 // Run
 
-/** What your prompt becomes when you run a workflow: the ask, and your notes for this run when you wrote any. */
-export function runText(name: string, notes: string): string {
+/**
+ * What your prompt becomes when you run a workflow: the ask, your notes for this run when you wrote any,
+ * then a blank line and the plan (planText). All of it is the prompt, so the conversation shows everything Claude got.
+ */
+export function runText(name: string, notes: string, plan: string): string {
   const n = notes.trim()
-  return `Run my saved REDhelm workflow "${name}".${n ? ` My notes for this run: ${n}` : ''}`
+  return `Run my saved REDhelm workflow "${name}".${n ? ` My notes for this run: ${n}` : ''}\n\n${plan}`
 }
 
 /** Claude Code keeps saved workflows of its own, which its Workflow tool runs by name: the plan says first that this is not one of them. */
@@ -720,7 +723,7 @@ function agentItem(a: SavedAgent, h: Here) {
 const practiceLine = (p: Practice) => sentence([p.when.trim().replace(/[\s,;:.]+$/, ''), p.do.trim()].filter(Boolean).join(', '))
 
 /**
- * The plan Claude gets in the prompt's context when you run a workflow (spec §8): the opening (that it
+ * The plan written out under your prompt when you run a workflow (spec §8): the opening (that it
  * is no saved workflow of Claude Code's to look up by name, and how to use it), then
  * the lead skills, the playbook, the shared brief parts (Roles), and the roles or the stages, each only
  * when it has something in it. A type is named as it runs here: `registered` maps a saved type to

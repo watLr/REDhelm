@@ -1543,7 +1543,8 @@ export const register: Register = (on, options) => {
     // hand with no edit out, nothing applies it: Edit is how one starts.
     if (edit && edits > 0) return { drop: '✎ Workflow: applying' }
     if (edit && (await read($, workflowSheet))?.mode === 'review') return { drop: 'REDhelm: press Edit first' }
-    // ▶ runs the saved workflow Run chose: your notes as the prompt, the workflow as a plan beside it.
+    // ▶ runs the saved workflow Run chose: your notes as the prompt, the workflow as a plan written out under them.
+    // Nothing goes in `context`, which you never see: the conversation shows everything Claude got.
     const notes = mode?.kind === 'run' ? runNotes(e.text, mode.name) : undefined
     if (mode?.kind === 'run' && notes !== undefined) {
       const w = await savedFor($, mode.id)
@@ -1554,7 +1555,7 @@ export const register: Register = (on, options) => {
       const draft = await takeDraft($)
       if (draft !== null) fillBack($, draft)
       if (!w) return { drop: `REDhelm: couldn't read "${mode.name}" · Load it and press Run again` }
-      return next({ ...e, text: runText(mode.name, notes), context: [...(e.context ?? []), planText(w, mode.registered, mode.leftBehind)] })
+      return next({ ...e, text: runText(mode.name, notes, planText(w, mode.registered, mode.leftBehind)) })
     }
     // A prompt addressed "→ name: …" goes to that agent instead of Claude.
     const address = e.text.match(ADDRESS)
