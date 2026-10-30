@@ -2362,6 +2362,33 @@ describe('the library', () => {
     expect(agentSpec(fm('model: "*m"', 'disallowedTools: ["&deny"]', 'initialPrompt: Use Bash & Read!'))).toMatchObject({ spec: { model: '*m', disallowedTools: ['&deny'], initialPrompt: 'Use Bash & Read!' } })
   })
 
+  test('a value or item that opens with any YAML indicator plain text cannot open with is no text either', () => {
+    const fm = (...lines: string[]) => `---\nname: a\ndescription: b\n${lines.join('\n')}\n---\nBody`
+    const cases: [string, string][] = [
+      [fm('disallowedTools: - Bash'), "disallowedTools isn't a list"], // a sequence on the key's line: Bash was never denied as written
+      [fm('disallowedTools: Edit, - Bash'), "disallowedTools isn't a list"],
+      [fm('disallowedTools:', '  - - Bash'), "disallowedTools isn't a list"],
+      [fm('tools: @Read'), "tools isn't a list"],
+      ['---\nname: a\ndescription: %x\n---\n', "description isn't text"],
+      [fm('model: ?opus'), "model isn't text"],
+      [fm('tools: `Read`'), "tools isn't a list"],
+      [fm('tools: ,Read'), "tools isn't a list"],
+      [fm('tools: Read, |Grep'), "tools isn't a list"],
+      [fm('tools: Read, >Grep'), "tools isn't a list"],
+      [fm('tools: Read, {Grep}'), "tools isn't a list"],
+      [fm('tools: [[Read]]'), "tools isn't a list"],
+      [fm('tools: ]Read'), "tools isn't a list"],
+      [fm('model: }x'), "model isn't text"],
+      [fm('model: : x'), "model isn't text"],
+      [fm('model: -'), "model isn't text"],
+    ]
+    for (const [file, error] of cases) expect([file, agentSpec(file)]).toEqual([file, { error }])
+    // Valid values still read: an indicator inside a value, a closed flow list, items on their own lines, a dash before a word.
+    expect(agentSpec('---\nname: a\ndescription: A reviewer - checks things\nmodel: sonnet\ntools: [Read, Grep]\ndisallowedTools:\n  - Bash\n  - Edit\nskills: -x, tdd\ninitialPrompt: What next? Then @mention, 100% & done\n---\nBody'))
+      .toEqual({ leftBehind: [], spec: { name: 'a', description: 'A reviewer - checks things', prompt: 'Body', model: 'sonnet', tools: ['Read', 'Grep'],
+        disallowedTools: ['Bash', 'Edit'], skills: ['-x', 'tdd'], initialPrompt: 'What next? Then @mention, 100% & done' } })
+  })
+
   test('CRLF reads as LF, in an agent file and in a brief', () => {
     const file = '---\nname: store-reviewer\ndescription: Reviews the store\ntools: Read, Grep\nhooks:\n  Stop: echo\ninitialPrompt: |\n  One\n  Two\n---\nYou review.\n\nCarefully.'
     const crlf = file.replace(/\n/g, '\r\n')
