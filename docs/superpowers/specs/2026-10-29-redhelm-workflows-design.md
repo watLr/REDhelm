@@ -352,8 +352,8 @@ workflow's sheet, opened from the library list if need be, shows in place of its
 
 ```
 Run it in this session?
-2 agents busy · 9 prompts · other project
-Run here    Cancel
+  2 agents busy · 9 prompts · other project
+  Run here    Cancel
 ```
 
 The second line holds only the reasons that apply, in this order, on one line that truncates and
