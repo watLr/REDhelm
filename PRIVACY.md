@@ -13,7 +13,7 @@ Everything REDhelm reads, it reads on your machine.
 - **Claude Code's settings.** Your model and theme, the `/config` rows its setup card offers, and `~/.claude/settings.json` for its status lines.
 - **Your installed plugins.** It runs `claude plugin list` to see which REDhelm is installed and where it came from, for the update check.
 - **Your computer.** Whether your desktop is light or dark (for Claude Code's `auto` theme), and whether `python3` runs (for its status lines).
-- **Your saved workflows**, in `~/.claude/redhelm/workflows/`, when you press **Load** or **Run**.
+- **Your saved workflows**, in `~/.claude/redhelm/workflows/`, when you press **Save** (to give a new one a name no other has), **Load** or **Run**.
 
 If you apply its status lines, their scripts read what Claude Code hands a status line, the session's conversation file and your settings files, to show the model that actually answered.
 
@@ -27,7 +27,7 @@ If you apply its status lines, their scripts read what Claude Code hands a statu
   - the release check: when it ran, which REDhelm is installed and its version, and the latest version published.
 - **In `~/.claude/redhelm/`.**
   - `statusline/` and `state/`: copies of REDhelm's status line scripts, and the newest model versions they have seen. These exist only if you applied the status lines.
-  - `workflows/`: the workflows you save, one file each, never in your project. A workflow holds what its review sheet showed you before you pressed **Save**: its name and purpose, the lead's skills and practices, the team (and in a lineup each agent's brief, as written), copies of the project's own agent type files, the project folder's name, and when you saved it. The folder's full path is never saved, only a hash of it. A workflow stays until you delete it with **Delete**, which empties its file, or remove the file yourself.
+  - `workflows/`: the workflows you save, one file each, never in your project. A workflow holds what its review sheet showed you before you pressed **Save**: its name and purpose; the lead's skills and practices, and the model and effort it ran on; the shared brief parts every agent's brief should include, as written; the team, each role or agent with its label, type and settings, the tools and skills it used, and the team it started (for a role, also one line on what it does and how many agents filled it) (in a lineup, also each agent's description and brief, as written); copies of the project's own agent type files the team ran as; the project folder's name; and when you saved it. The folder's full path is never saved, only a hash of it. A workflow stays until you delete it with **Delete**, which empties its file, or remove the file yourself.
 - **In Claude Code's settings.** REDhelm changes them only when you press **Apply** on its setup card, as if you had changed them in `/config`, and writes its status lines into `~/.claude/settings.json`. After that, it keeps a status line you applied pointing at its copy in `~/.claude/redhelm/`, so an update never breaks it. These settings are Claude Code's own, and so is what they do: one of them, if you apply it, has Claude Code push a notification to your phone when a question is waiting. `/redhelm right` and `/redhelm bottom` change REDhelm's own placement setting.
 
 REDhelm writes no file into your project.
@@ -60,7 +60,7 @@ A saved workflow does nothing on its own. It affects a later session only when y
 - **Headlines, question titles and the question check:** set **Labels** to plain in `/config`. REDhelm's own wording check then decides whether a message is a question.
 - **Workflow reading and edits:** set **Workflow reading** to off in `/config`. Save then keeps only what REDhelm saw, and Edit is not offered.
 - **A saved workflow:** open it from **Load** and press **Delete** twice, or remove its file from `~/.claude/redhelm/workflows/`.
-- **All of it:** disable or uninstall REDhelm (`claude plugin disable` or `claude plugin uninstall`). This also stops the update check, which has no setting of its own. REDhelm has no step that removes what it kept: delete `~/.claude/redhelm/`, and its status lines in `~/.claude/settings.json`, if you want them gone.
+- **All of it:** disable or uninstall REDhelm (`claude plugin disable` or `claude plugin uninstall`). This also stops the update check, which has no setting of its own. REDhelm has no step that removes what it kept: delete `~/.claude/redhelm/`, and its status lines in `~/.claude/settings.json`, if you want them gone. Its plugin storage (the file in Claude Code's configuration folder that holds the model switches, the model versions seen, the setup items handled and the last update check) may stay in place after you uninstall.
 
 ## Headless runs
 

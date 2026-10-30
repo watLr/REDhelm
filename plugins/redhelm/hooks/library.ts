@@ -1,4 +1,4 @@
-import type { Draft, Lead, Practice, SavedAgent, SavedRole, SavedType, SavedWorkflow } from '../types'
+import type { Draft, Lead, Practice, SavedAgent, SavedRole, SavedType, SavedWorkflow, WorkflowSheet } from '../types'
 import { LEFT_BEHIND } from './agentfile'
 import { hash } from './labels'
 import { answerOf, compact, head, LABEL, NAME, PRACTICE, PURPOSE, ROLE } from './workflows'
@@ -35,6 +35,13 @@ export type EditAnswer = { ops: Op[] } | { cannot: string }
 
 /** One model call per edit: it answers with ops. */
 export const EDIT_CALL = { model: 'sonnet', effort: 'low', maxTokens: 1200, timeoutMs: 30_000 } as const
+
+/**
+ * Whether Edit is offered and can start: a review sheet's draft, read (the reading names the items as they
+ * were when it was asked), and Workflow reading on (`reading`), since an edit asks Sonnet.
+ */
+export const editable = (s: WorkflowSheet | null | undefined, reading: boolean) =>
+  reading && s?.mode === 'review' && !!s.draft && s.draft.read !== 'pending'
 
 /** The Agent tool's values. */
 const EFFORTS: readonly unknown[] = ['lower', 'higher', 'low', 'medium', 'high', 'xhigh', 'max']

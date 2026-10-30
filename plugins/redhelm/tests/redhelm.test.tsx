@@ -14,7 +14,7 @@ import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
   READING_CALL, READING_SYSTEM, distinctLabels, runCalls, sharedParts, stagesOf, stretches, teamOf, usedIn, widen, type Msg } from '../hooks/workflows'
-import { applyOps, checkOps, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
+import { applyOps, checkOps, editable, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
   EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
 import { agentSpec, typeName } from '../hooks/agentfile'
 
@@ -3407,6 +3407,15 @@ describe('Workflow reading', () => {
     expect(box.passed).toEqual([])
     expect(await ui.find({ key: 'wf-item-2' })).toBeDefined()
     await ui.unmount()
+  })
+
+  test('Edit is offered, and starts, only on a read draft, and never with Workflow reading off', () => {
+    const draft = readWorkflow({ msgs: said, records: {}, teams: {}, list: stretches(said), back: 0, root: '/p', lead: {} })!
+    const sheet = (read: Draft['read']) => ({ mode: 'review' as const, draft: { ...draft, read }, undo: [], token: 1 })
+    expect(['done', 'failed', 'pending'].map(read => editable(sheet(read as Draft['read']), true))).toEqual([true, true, false])
+    // Off: no draft takes an edit, whatever its reading, so neither the sheet's Edit nor a press left from before starts one.
+    expect(['done', 'failed', 'off'].map(read => editable(sheet(read as Draft['read']), false))).toEqual([false, false, false])
+    expect([editable({ mode: 'review', undo: [], token: 1 }, true), editable({ mode: 'saved', id: 'x' }, true), editable(null, true)]).toEqual([false, false, false])
   })
 
   test('sonnet, the default: one reading per Save, and Edit is offered', { options: { workflowReading: 'sonnet' } } as any, async ($: any, on: any) => {

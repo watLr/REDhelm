@@ -2,7 +2,7 @@ import type { Elements } from 'claude-code'
 
 import type { Agent, Detail, Draft, Guard, Message, Note, Release, SavedWorkflow, SetupItem, WorkflowSheet as SheetState, Workspace } from '../types'
 import { agentSpec, LEFT_BEHIND } from './agentfile'
-import { itemCount, projectKey } from './library'
+import { editable, itemCount, projectKey } from './library'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
 import { bars, buckets, isMoving, rasterCells, spectrum, speed, svgTrace, tail, type Burst } from './trace'
 
@@ -1025,7 +1025,7 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
       <WorkflowParts els={els} v={v} act={act} d={d} detail={w.detail} room={room} stacked={stacked} review={{ remove: !pending && !busy && items > 1 }} />
       <Box columnGap={1} rowGap={1} flexWrap="wrap">
         {items > 0 && !busy && chip('wf-keep', 'Save', act.wfKeep, true)}
-        {!pending && v.reading && chip('wf-edit', 'Edit', act.wfEdit)}
+        {editable(w, v.reading) && chip('wf-edit', 'Edit', act.wfEdit)}
         {!pending && !busy && w.undo.length > 0 && chip('wf-undo', 'Undo', act.wfUndo)}
         {d.more && !busy && chip('wf-earlier', 'Earlier', act.wfEarlier)}
         {cancel}

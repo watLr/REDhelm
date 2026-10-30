@@ -10,7 +10,7 @@ import { BUCKET_MS, BUCKETS, burst, isMoving, record, spectrum, traceRaster, typ
 import { Alert, Backdropped, Panel, Sheet, WorkflowSheet, WorkflowsSection, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
 import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, toolKey, usedIn, widen,
   type Call, type Msg, type Reading, type Stretch, type TraceEvent, type Used } from './workflows'
-import { EDIT_CALL, applyOps, checkOps, editRequest, itemCount, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
+import { EDIT_CALL, applyOps, checkOps, editable, editRequest, itemCount, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
   type Op } from './library'
 import { agentSpec, typeName } from './agentfile'
 
@@ -1050,8 +1050,7 @@ const openWorkflowPane = ($: $) => $.ui.open({ id: WORKFLOW_PANE, title: 'Workfl
  * it for them to reach the prompt (as Reply closes the agent sheet) and opens it again once the edit lands.
  */
 async function startEdit($: $, pane: boolean) {
-  const s = await read($, workflowSheet)
-  if (cfg.workflowReading === 'off' || s?.mode !== 'review' || !s.draft || s.draft.read === 'pending') return
+  if (!editable(await read($, workflowSheet), cfg.workflowReading === 'sonnet')) return
   await endReply($)
   if (!(await takeBox($, EDITING))) return
   await update($, workflowMode, (): WorkflowMode => (pane ? { kind: 'edit', pane: true } : { kind: 'edit' }))
