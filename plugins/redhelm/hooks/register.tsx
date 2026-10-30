@@ -8,10 +8,10 @@ import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
 import { BUCKET_MS, BUCKETS, burst, isMoving, record, spectrum, traceRaster, type Burst } from './trace'
 import { Alert, Backdropped, Panel, Sheet, WorkflowSheet, WorkflowsSection, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
-import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, toolKey, usedIn, widen,
+import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, toolKey, typedPrompts, usedIn, widen,
   type Call, type Msg, type Reading, type Stretch, type TraceEvent, type Used } from './workflows'
-import { EDIT_CALL, applyOps, checkOps, editable, editRequest, itemCount, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
-  type Op } from './library'
+import { EDIT_CALL, applyOps, checkOps, editable, editRequest, itemCount, listed, missingSkills, parseEdit, parseSaved, planText, projectKey, runReasons, runText, slug,
+  toSaved, uniqueName, type Op } from './library'
 import { agentSpec, typeName } from './agentfile'
 
 type $ = EngineInterface
@@ -1183,16 +1183,50 @@ async function registerTypes($: $, w: SavedWorkflow) {
   return { registered: Object.fromEntries(registered), leftBehind: Object.fromEntries(leftBehind) }
 }
 
+/** A read for Run's question that fails counts nothing: the question is advice, and never stands in Run's way. */
+async function orNone<T>(work: () => Promise<T>, none: T) {
+  try {
+    return await work()
+  } catch {
+    return none
+  }
+}
+
+/**
+ * Why Run asks first, as one line, empty when nothing applies: this session's agents still working, the prompts
+ * you typed, a workflow from another project (as its sheet's `from` says), and the lead's skills this session has
+ * no slash command for. Agent types are not checked: Run registers the copied ones, and the others can't be listed.
+ */
+async function runQuestion($: $, w: SavedWorkflow) {
+  const busy = await orNone(async () => Object.values(await read($, agents)).filter(a => LIVE.has(a.status)).length, 0)
+  const prompts = await orNone(async () => typedPrompts(asMsgs(await $.session.messages())), 0)
+  const other = await orNone(async () => w.projectKey !== projectKey(root || (await $.session.root())) && !!w.project, false)
+  const missing = w.lead.skills.length ? await orNone(async () => missingSkills(w.lead.skills, (await $.command.list()).map(c => c.name)), []) : []
+  return runReasons({ busy, prompts, other, missing })
+}
+
 /** A Run under way: a second press while it registers and fills is ignored, so its mark is never kept as your draft. */
 let running = false
 
-/** Run: copied types registered, then `▶ <name>: ` in the box, where your Enter is the go-ahead. A saved workflow's sheet steps aside for it. */
-async function runWorkflow($: $, id: string) {
+/**
+ * Run: copied types registered, then `▶ <name>: ` in the box, where your Enter is the go-ahead. A saved workflow's
+ * sheet steps aside for it. When this session already has other work, Run does nothing yet: the workflow's sheet
+ * (opened from the list if need be) asks first. `ask` false is that question's Run here, which runs at once.
+ */
+async function runWorkflow($: $, id: string, ask = true) {
   if (running) return
   running = true
   try {
     const w = (await read($, workflowList))?.workflows.find(x => x.id === id)
     if (!w) return
+    const why = ask ? await runQuestion($, w) : ''
+    if (why) {
+      const s = await read($, workflowSheet)
+      if (s?.mode !== 'saved' || s.id !== id) await openWorkflow($, id)
+      // Delete's ask gives way to Run's: the two never show together.
+      await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? { ...cur, armed: undefined, asking: why } : cur))
+      return
+    }
     await endReply($)
     const { registered, leftBehind } = await registerTypes($, w)
     if (!(await takeBox($, `▶ ${w.name}: `))) return
@@ -1220,7 +1254,8 @@ async function deleteWorkflow($: $, id: string) {
   const s = await read($, workflowSheet)
   if (s?.mode !== 'saved' || s.id !== id) return
   if (!s.armed) {
-    await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? { ...cur, armed: true } : cur))
+    // Run's question gives way to Delete's.
+    await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? { ...cur, armed: true, asking: undefined } : cur))
     return
   }
   try {
@@ -1332,6 +1367,8 @@ function actions($: $, inPane = false): Actions {
     wfLoad: () => void quietly(() => loadLibrary($)),
     wfOpen: id => void quietly(() => openWorkflow($, id)),
     wfRun: id => void quietly(() => runWorkflow($, id)),
+    wfRunHere: id => void quietly(() => runWorkflow($, id, false)),
+    wfCancelRun: () => void quietly(() => update($, workflowSheet, s => (s?.mode === 'saved' ? { ...s, asking: undefined } : s))),
     wfDelete: id => void quietly(() => deleteWorkflow($, id)),
   }
 }

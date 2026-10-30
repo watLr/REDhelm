@@ -61,8 +61,12 @@ export type Actions = {
   wfLoad: () => void
   /** Opens a saved workflow's sheet. */
   wfOpen: (id: string) => void
-  /** Run: `▶ <name>: ` in the prompt box, where your Enter hands the workflow to Claude. */
+  /** Run: `▶ <name>: ` in the prompt box, where your Enter hands the workflow to Claude; when this session already has other work, it asks first. */
   wfRun: (id: string) => void
+  /** Run here, on Run's question: runs it as Run does when nothing applies. */
+  wfRunHere: (id: string) => void
+  /** Cancel on Run's question: the sheet's row comes back, nothing run. */
+  wfCancelRun: () => void
   /** Delete: the first press asks, the second removes it from the library. */
   wfDelete: (id: string) => void
 }
@@ -696,7 +700,8 @@ function libraryWords(w: SavedWorkflow, here: string) {
 
 /**
  * The foot of the sidebar, and the bottom bar's Workflows pane: Save and Load, and under them the
- * library as Load read it, this project's first: each name opens its sheet, Run goes straight to the prompt box.
+ * library as Load read it, this project's first: each name opens its sheet, Run goes straight to the prompt box
+ * (or, when this session already has other work, to the sheet, which asks first).
  */
 export function WorkflowsSection({ els, v, act, columns }: { els: Els; v: View; act: Actions; columns?: number }) {
   const { Box, Text, Button } = els
@@ -946,7 +951,8 @@ function WorkflowParts({ els, v, act, d, detail, room, stacked, review }:
  *   the reading is out: it names the items as they were when it was asked. Save and Earlier wait out
  *   an edit applying, and a form with no items has no Save.
  * - A saved workflow, opened from the library: the same parts, with Run, Delete and Close, and one line
- *   when this session runs on another model than the lead did.
+ *   when this session runs on another model than the lead did. When this session already has other work,
+ *   Run's question takes the row's place: why, in one line, with Run here and Cancel.
  */
 export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: View; act: Actions; columns: number; back?: () => void }) {
   const { Box, Text, Button } = els
@@ -980,11 +986,23 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
           {ran && runs && ran !== runs && <Text color="subtle" wrap="wrap">{`The lead ran on ${ran} · this session runs ${runs}`}</Text>}
         </Box>
         <WorkflowParts els={els} v={v} act={act} d={asDraft(s)} detail={w.detail} room={room} stacked={stacked} />
-        <Box columnGap={1} rowGap={1} flexWrap="wrap">
-          {chip(`wf-run-${s.id}`, 'Run', () => act.wfRun(s.id), true)}
-          {chip('wf-delete', 'Delete', () => act.wfDelete(s.id))}
-          {chip('wf-close', 'Close', act.wfClose)}
-        </Box>
+        {w.asking ? (
+          // Run's question, in the row's place: three lines at any width, so nothing here wraps.
+          <Box key="wf-ask" flexDirection="column">
+            <Text wrap="truncate-end">Run it in this session?</Text>
+            <Text color="subtle" wrap="truncate-end">{w.asking}</Text>
+            <Box columnGap={1}>
+              {chip('wf-ask-run', 'Run here', () => act.wfRunHere(s.id), true)}
+              {chip('wf-ask-cancel', 'Cancel', act.wfCancelRun)}
+            </Box>
+          </Box>
+        ) : (
+          <Box columnGap={1} rowGap={1} flexWrap="wrap">
+            {chip(`wf-run-${s.id}`, 'Run', () => act.wfRun(s.id), true)}
+            {chip('wf-delete', 'Delete', () => act.wfDelete(s.id))}
+            {chip('wf-close', 'Close', act.wfClose)}
+          </Box>
+        )}
         {w.armed && <Text color="warning">Press again to delete</Text>}
       </Box>,
     )

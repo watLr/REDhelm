@@ -13,8 +13,8 @@ import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail }
 import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
-  READING_CALL, READING_SYSTEM, distinctLabels, runCalls, sharedParts, stagesOf, stretches, teamOf, usedIn, widen, type Msg } from '../hooks/workflows'
-import { applyOps, checkOps, editable, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
+  READING_CALL, READING_SYSTEM, distinctLabels, runCalls, sharedParts, stagesOf, stretches, teamOf, typedPrompts, usedIn, widen, type Msg } from '../hooks/workflows'
+import { applyOps, checkOps, editable, editRequest, listed, missingSkills, parseEdit, parseSaved, planText, projectKey, runReasons, runText, slug, toSaved, uniqueName,
   EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
 import { agentSpec, typeName } from '../hooks/agentfile'
 
@@ -2086,6 +2086,18 @@ describe('the library', () => {
     expect(r.workflows.map(w => w.id)).toEqual(['c', 'a', 'b'])
     expect(r.unreadable).toBe(1)
   })
+  test("Run's question: each reason's words, in order, none in a fresh session; a skill this session has is never missing", () => {
+    const none = { busy: 0, prompts: 0, other: false, missing: [] }
+    expect(runReasons(none)).toBe('')
+    expect(runReasons({ busy: 1, prompts: 1, other: true, missing: ['tdd'] })).toBe('1 agent busy · 1 prompt · other project · tdd missing')
+    expect(runReasons({ ...none, busy: 2, prompts: 9, missing: ['tdd', 'ship'] })).toBe('2 agents busy · 9 prompts · 2 skills missing')
+    expect(runReasons({ ...none, other: true, missing: ['ship'] })).toBe('other project · ship missing')
+    // A `/` command (a skill run by hand too) and an agent's notice are no prompts you typed.
+    expect(typedPrompts(FRESH)).toBe(0)
+    expect(typedPrompts([slash('redhelm'), you('Fix the login'), notice('done'), lead(call('a1')), slash('redmanager'), you('And the tests')])).toBe(2)
+    // Claude Code lists a plugin's skill as `<plugin>:<skill>` and some of yours bare; the lead may have named either.
+    expect(missingSkills(['tdd', 'kit:tdd', 'redmanager', 'tools:docx', 'other:tdd', 'ship'], ['kit:tdd', 'redmanager', 'docx'])).toEqual(['other:tdd', 'ship'])
+  })
   test('the run text and each plan shape', () => {
     expect(runText('Build: phase two', '', 'The plan.')).toBe('Run my saved REDhelm workflow "Build: phase two".\n\nThe plan.')
     expect(runText('Docs', 'only src/store.js', 'The plan.')).toBe('Run my saved REDhelm workflow "Docs". My notes for this run: only src/store.js\n\nThe plan.')
@@ -2707,6 +2719,8 @@ const lib = (id: string) => `${HOME}/.claude/redhelm/workflows/${id}.json`
 const savedOne = (over: Partial<SavedWorkflow>): SavedWorkflow => ({ ...emptySaved, project: 'p', projectKey: projectKey('/p'),
   stages: [{ agents: [{ ...savedAgent, label: 'Tests', description: 'Add tests', brief: 'Add tests for the store' }] }], ...over })
 const library = (...ws: SavedWorkflow[]) => Object.fromEntries(ws.map(w => [lib(w.id), JSON.stringify(w)]))
+/** A session where you only ran /redhelm: Run asks nothing. */
+const FRESH = [slash('redhelm')]
 
 const REVIEWER = '---\nname: store-reviewer\ndescription: Reviews the store\ntools: Read, Grep\npermissionMode: bypassPermissions\nhooks:\n  Stop: echo\n---\nYou review the store.'
 
@@ -2767,7 +2781,7 @@ describe('editing and running a workflow', () => {
 
   test('▶ becomes the run text with the plan written out under it, and context passes as it came', { plugins: [BESIDE] }, async ($: any, on: any) => {
     const box = promptBox(on, 'half a prompt')
-    setup(on, { files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
@@ -2792,7 +2806,7 @@ describe('editing and running a workflow', () => {
 
   test('a name with a colon runs', async ($: any, on: any) => {
     const box = promptBox(on)
-    setup(on, { files: library(savedOne({ id: 'build-phase-two', name: 'Build: phase two' })) })
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'build-phase-two', name: 'Build: phase two' })) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
@@ -2810,7 +2824,7 @@ describe('editing and running a workflow', () => {
 
   test('deleting the mark ends the mode', { plugins: [PEEK] }, async ($: any, on: any) => {
     const box = promptBox(on, 'my draft')
-    setup(on, { files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
@@ -2914,7 +2928,7 @@ describe('editing and running a workflow', () => {
     const box = promptBox(on)
     const files: Record<string, string> = library(savedOne({ id: 'review', name: 'Review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
       stages: [{ agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', brief: 'Review the store' }] }] }))
-    setup(on, { files })
+    setup(on, { said: FRESH, files })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
@@ -2952,8 +2966,10 @@ describe('editing and running a workflow', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
     await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle()
+    await ui.press({ key: 'wf-ask-run' }); await settle() // this session has a prompt: Run asked first
     expect(toasts).toEqual(['Could not reach the prompt'])
     expect(await peek($, 'workflowMode')).toBeNull()
+    await ui.press({ key: 'wf-back' }); await settle()
     await ui.press({ key: 'wf-save' }); await settle()
     await ui.press({ key: 'wf-edit' }); await settle()
     expect(toasts).toEqual(['Could not reach the prompt', 'Could not reach the prompt'])
@@ -3061,6 +3077,7 @@ describe('editing and running a workflow', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
     await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle()
+    await ui.press({ key: 'wf-ask-run' }); await settle() // an agent is busy: Run asked first
     await $.prompt.submit({ text: '<task-notification> a1 finished </task-notification>', origin: { kind: 'task-notification' } })
     await $.prompt.submit({ text: 'an idle notice', isMeta: true })
     await clock.advance(200); await settle()
@@ -3078,7 +3095,7 @@ describe('editing and running a workflow', () => {
   test("a saved workflow's sheet: its parts, Run, Delete and Close, and the lead's model when this session runs another", async ($: any, on: any) => {
     on('settings.read', () => ({ value: {} }))
     const box = promptBox(on)
-    setup(on, { files: library(savedOne({ id: 'build', name: 'Build', purpose: 'Implementers, then a review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'build', name: 'Build', purpose: 'Implementers, then a review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
       lead: { skills: ['redmanager'], playbook: [], briefParts: [], model: 'claude-opus-5-5[1m]' },
       stages: [{ agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', brief: 'Review the store' }] }] })) })
     await engine(on, true)($)
@@ -3112,16 +3129,18 @@ describe('editing and running a workflow', () => {
     setup(on, { files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    // This session has a prompt: Run asks first, and Run here runs.
+    const run = async () => { await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle(); await ui.press({ key: 'wf-ask-run' }); await settle() }
     await ui.press({ key: 'wf-load' }); await settle()
-    await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle()
+    await run()
     await ui.press({ key: 'wf-save' }); await settle()
     await ui.press({ key: 'wf-edit' }); await settle()
     expect(box.text).toBe('✎ Workflow: ')
     expect(await peek($, 'workflowMode')).toEqual({ kind: 'edit' })
     await ui.press({ key: 'wf-cancel' }); await settle()
     expect(box.text).toBe('half a prompt') // the draft from before Run, not Run's mark
-    await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle()
-    await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle() // Run again: its own mark is no draft either
+    await run()
+    await run() // Run again: its own mark is no draft either
     await $.prompt.submit({ text: 'something else' }); await clock.advance(200); await settle()
     expect(box.text).toBe('half a prompt')
     await ui.unmount()
@@ -3132,7 +3151,7 @@ describe('editing and running a workflow', () => {
     const registered: any[] = []
     on('agent.register', (_$: any, e: any) => (registered.push(e), { value: { agent: `redhelm:${e.name}` } }))
     const box = promptBox(on)
-    setup(on, { files: library(savedOne({ id: 'lint', name: 'Lint', types: [{ name: 'store-linter', definition: 'no front matter' }],
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'lint', name: 'Lint', types: [{ name: 'store-linter', definition: 'no front matter' }],
       stages: [{ agents: [{ ...savedAgent, label: 'Lint', type: 'store-linter', brief: 'Lint it' }] }] })) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -3149,7 +3168,7 @@ describe('editing and running a workflow', () => {
     on('config.list', () => ({ value: [] }))
     on('settings.read', () => ({ value: {} }))
     const box = promptBox(on)
-    setup(on, { files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'tests-then-a-review', name: 'Tests, then a review' })) })
     await engine(on, true)($)
     const sw = (source: string, to: string) => ($ as any).classic.PostModelSwitch({ from_model: 'claude-fable-5-1', to_model: to, requested_model: null, source })
     await sw('auto', 'claude-opus-4-8')
@@ -3194,6 +3213,7 @@ describe('editing and running a workflow', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-load' }); await settle()
     await ui.press({ key: 'wf-run-tests-then-a-review' }); await settle()
+    await ui.press({ key: 'wf-ask-run' }); await settle() // an agent is busy: Run asked first
     await sw('auto', 'claude-opus-4-8')
     expect((await $.prompt.submit({ text: 'something else' })).drop).toMatch(/switched models on its own/)
     await clock.advance(200); await settle()
@@ -3281,7 +3301,7 @@ describe('editing and running a workflow', () => {
     const releases: (() => void)[] = []
     on('agent.register', (_$: any, e: any) => new Promise(r => releases.push(() => r({ value: { agent: `redhelm:${e.name}` } }))))
     const box = promptBox(on, 'half a prompt')
-    setup(on, { files: library(savedOne({ id: 'review', name: 'Review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'review', name: 'Review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
       stages: [{ agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', brief: 'Review the store' }] }] })) })
     await engine(on, true)($)
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -3293,6 +3313,70 @@ describe('editing and running a workflow', () => {
     expect(box.text).toBe('▶ Review: ')
     await $.prompt.submit({ text: 'something else' }); await clock.advance(200); await settle()
     expect(box.text).toBe('half a prompt')
+    await ui.unmount()
+  })
+
+  test('with agents busy, Run asks first and does nothing yet; Cancel brings the row back, Run here runs', async ($: any, on: any) => {
+    const registered: any[] = []
+    on('agent.register', (_$: any, e: any) => (registered.push(e), { value: { agent: `redhelm:${e.name}` } }))
+    const box = promptBox(on, 'half a prompt')
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'review', name: 'Review', types: [{ name: 'store-reviewer', definition: REVIEWER }],
+      stages: [{ agents: [{ ...savedAgent, label: 'Review', type: 'store-reviewer', brief: 'Review the store' }] }] })) })
+    await engine(on, true)($)
+    await spawn($); await spawn($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const asks = async () => !!(await ui.find({ key: 'wf-ask' }))
+    const armed = async () => !!(await ui.find({ type: 'Text', text: /^Press again to delete$/ }))
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-open-review' }); await settle()
+    await ui.press({ key: 'wf-delete' }); await settle()
+    expect(await armed()).toBe(true)
+    await ui.press({ key: 'wf-run-review' }); await settle() // Run clears Delete's ask
+    expect(await ui.find({ type: 'Text', text: /^Run it in this session\?$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^2 agents busy$/ })).toBeDefined()
+    expect([await armed(), registered, box.text]).toEqual([false, [], 'half a prompt'])
+    await ui.press({ key: 'wf-ask-cancel' }); await settle()
+    expect(await asks()).toBe(false)
+    for (const key of ['wf-run-review', 'wf-delete', 'wf-close']) expect(await ui.find({ key })).toBeDefined()
+    expect([registered, box.text]).toEqual([[], 'half a prompt'])
+    await ui.press({ key: 'wf-run-review' }); await settle()
+    await ui.press({ key: 'wf-ask-run' }); await settle() // no second check
+    expect([box.text, registered.length, await asks()]).toEqual(['▶ Review: ', 1, false])
+    await ui.unmount()
+  })
+
+  test("Run in the list opens the sheet on the question (another project's, a skill missing), in three rows at 22 columns; Back clears it", async ($: any, on: any) => {
+    on('command.list', () => ({ value: [{ name: 'kit:tdd', description: '', source: 'plugin', plugin: 'kit' }] }))
+    const box = promptBox(on)
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'build', name: 'Build', projectKey: 'k0', project: 'notes-app', lead: { skills: ['tdd', 'ship'], playbook: [], briefParts: [] } })) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 22 } })
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-run-build' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /^from notes-app$/ })).toBeDefined() // its sheet
+    expect(await ui.find({ type: 'Text', text: /^other project · ship missing$/ })).toBeDefined()
+    // Two lines that truncate and a row that cannot wrap: never a fourth row.
+    const rows = (await ui.find({ key: 'wf-ask' }))!.children.map((c: any) => [c.type, c.props.wrap ?? c.props.flexWrap ?? null])
+    expect(rows).toEqual([['Text', 'truncate-end'], ['Text', 'truncate-end'], ['Box', null]])
+    expect(box.text).toBe('')
+    await ui.press({ key: 'wf-back' }); await settle()
+    await ui.press({ key: 'wf-open-build' }); await settle()
+    expect(await ui.find({ key: 'wf-ask' })).toBeUndefined()
+    await ui.press({ key: 'wf-run-build' }); await settle()
+    await ui.press({ key: 'wf-ask-run' }); await settle()
+    expect(box.text).toBe('▶ Build: ')
+    await ui.unmount()
+  })
+
+  test('a read that fails gives no reason, and never holds Run', async ($: any, on: any) => {
+    on('command.list', () => ({ deny: 'no commands' }))
+    const box = promptBox(on)
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'build', name: 'Build', lead: { skills: ['tdd'], playbook: [], briefParts: [] } })) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-run-build' }); await settle()
+    expect(box.text).toBe('▶ Build: ')
     await ui.unmount()
   })
 

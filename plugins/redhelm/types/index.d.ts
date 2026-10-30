@@ -184,11 +184,12 @@ export type Detail = { kind: 'item' | 'practice' | 'parts'; index: number }
 /**
  * The workflow sheet. `review`: a Save being looked over; no `draft` when the session held no agent
  * work or could not be read (`error`). `token` is new with each Save and Earlier: a reading that lands
- * under another is dropped. `saved`: a workflow from the library.
+ * under another is dropped. `saved`: a workflow from the library; `armed`, Delete asks once more; `asking`,
+ * Run asks first whether to run it in this session, for these reasons (`2 agents busy · 9 prompts`).
  */
 export type WorkflowSheet =
   | { mode: 'review'; draft?: Draft; error?: string; undo: Draft[]; busy?: 'applying'; detail?: Detail; token: number }
-  | { mode: 'saved'; id: string; armed?: boolean; detail?: Detail }
+  | { mode: 'saved'; id: string; armed?: boolean; asking?: string; detail?: Detail }
 
 /**
  * Who owns the prompt box besides Reply: an edit of the open draft, or a run of a saved workflow. `pane`:

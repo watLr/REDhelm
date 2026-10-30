@@ -654,6 +654,29 @@ export function runText(name: string, notes: string, plan: string): string {
   return `Run my saved REDhelm workflow "${name}".${n ? ` My notes for this run: ${n}` : ''}\n\n${plan}`
 }
 
+/**
+ * The lead's skills this session has no slash command for. Claude Code lists a plugin's skill as
+ * `<plugin>:<skill>`, and some of yours by a bare name the Skill tool shows under a prefix, while the lead
+ * may have named either: a skill and a command match whole, or by the part after the colon when either has none.
+ */
+export function missingSkills(skills: readonly string[], commands: readonly string[]): string[] {
+  const bare = (n: string) => n.slice(n.lastIndexOf(':') + 1)
+  return skills.filter(s => !commands.some(c => c === s || ((!s.includes(':') || !c.includes(':')) && bare(c) === bare(s))))
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+
+/**
+ * Why Run asks first whether to run it in this session, as the question's one line, in this order:
+ * this session's agents still working, the prompts you typed, a workflow saved in another project, the
+ * lead's skills this session lacks. Empty when none applies, and Run runs at once.
+ */
+export function runReasons(f: { busy: number; prompts: number; other: boolean; missing: readonly string[] }): string {
+  const skills = f.missing.length === 1 ? `${f.missing[0]} missing` : f.missing.length > 1 && `${f.missing.length} skills missing`
+  return [f.busy > 0 && `${plural(f.busy, 'agent')} busy`, f.prompts > 0 && plural(f.prompts, 'prompt'), f.other && 'other project', skills]
+    .filter(Boolean).join(' · ')
+}
+
 /** Claude Code keeps saved workflows of its own, which its Workflow tool runs by name: the plan says first that this is not one of them. */
 const NOT_THEIRS = "It is not one of Claude Code's saved workflows, so don't look it up by name: start the agents below with the Agent tool, or write a Workflow script from them."
 const OPENING = 'It is how this kind of work was led and staffed before: start from it, and fit it to this problem and to my notes. It fixes no loops, rounds or checks; choose those for this problem. If an agent type or skill is not available here, go without it and say so.'

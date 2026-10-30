@@ -31,6 +31,9 @@ export function isPrompt(m: Msg) {
 
 const COMMAND = /<command-name>\/([^<]+)<\/command-name>/
 
+/** How many prompts you typed; a `/` command is not counted (`/redhelm`, a skill you ran by hand). */
+export const typedPrompts = (msgs: readonly Msg[]) => msgs.filter(m => isPrompt(m) && !COMMAND.test(m.text)).length
+
 /** The skill a `/` command at `i` loaded: one the model went on to answer. A built-in like /effort gets no answer. */
 function slashSkill(msgs: readonly Msg[], i: number) {
   const m = msgs[i]!
