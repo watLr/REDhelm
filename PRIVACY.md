@@ -9,7 +9,7 @@ REDhelm is a plugin for Claude Code. It runs on your computer, inside Claude Cod
 Everything REDhelm reads, it reads on your machine.
 
 - **Your project's files.** Work boards in the project folder, in the few folders above it and in the folders right inside it: lane boards (`docs/aaa/board/`), status boards (`.status-board/`), REDStudio (`.redstudio/`) and REDManager (`.redmanager/`). For workflows, the agent type files in the project's `.claude/agents/` folder. When you press **Run** on a workflow that carries copied agent types, also the agent files in `~/.claude/agents/`, to see which types you already have.
-- **Claude Code's session data.** This session's conversation, each agent's own conversation, the agents Claude Code lists, and which models answered.
+- **Claude Code's session data.** This session's conversation, each agent's own conversation, the agents Claude Code lists, and which models answered. When you press **Run** on a workflow whose lead used skills, also this session's slash commands, to see which of those skills it has.
 - **Claude Code's settings.** Your model and theme, the `/config` rows its setup card offers, and `~/.claude/settings.json` for its status lines.
 - **Your installed plugins.** It runs `claude plugin list` to see which REDhelm is installed and where it came from, for the update check.
 - **Your computer.** Whether your desktop is light or dark (for Claude Code's `auto` theme), and whether `python3` runs (for its status lines).

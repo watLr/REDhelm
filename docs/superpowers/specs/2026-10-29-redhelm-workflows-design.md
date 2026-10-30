@@ -180,7 +180,8 @@ Workflows                          Save   Load
    `Close`. When this session's model differs from the lead's, it says so in one dim line
    (`The lead ran on opus · this session runs sonnet`); nothing is changed for you.
    `Delete` asks once more ("Press again to delete") before it removes the file.
-3. **Run** puts `▶ Build, check, review: ` in the prompt box. You may add notes for this run
+3. **Run** puts `▶ Build, check, review: ` in the prompt box (when this session already has
+   other work, it asks first, §8). You may add notes for this run
    and press Enter; that Enter is the go-ahead. Claude does the rest (§8).
 
 ## 3. How Save reads the session
@@ -345,7 +346,27 @@ type EditAnswer = { ops: Op[] } | { cannot: string }
 
 ## 8. Run: Claude does it, as if you asked
 
-When you press **Run**, before the prompt box is filled, REDhelm registers any copied type
+When you press **Run**, REDhelm first checks this session. When nothing applies, Run goes on at
+once. When something does, nothing happens yet (no type registered, the prompt box untouched): the
+workflow's sheet, opened from the library list if need be, shows in place of its Run / Delete / Close row:
+
+```
+Run it in this session?
+2 agents busy · 9 prompts · other project
+Run here    Cancel
+```
+
+The second line holds only the reasons that apply, in this order, on one line that truncates and
+never wraps: this session's agents still working (pending, running or waiting), the prompts you typed
+in this conversation (not `/` commands), `other project` when the workflow was saved in another (as its
+`from` line says), and the lead's skills this session has no slash command for (`<skill> missing`, or
+`N skills missing`). Agent types are not checked: Run registers the copied ones, and the others can't be
+listed. **Run here** runs at once, with no second check; **Cancel** brings the row back. Closing the
+sheet, Back, or opening another workflow clears the question, and it never shows with Delete's "Press
+again to delete". No model call is made, and a read that fails gives no reason: the question is advice,
+and never stands in Run's way.
+
+Then, before the prompt box is filled, REDhelm registers any copied type
 this project lacks (§9): a registered type is dispatchable from the next turn, which your
 Enter starts.
 
@@ -577,6 +598,7 @@ What the build decided beyond this spec, from a probe of Claude Code 2.1.312, th
 - The plan's opening says it is not one of Claude Code's saved workflows. In the live check, Claude first looked it up with the Workflow tool.
 - Tools added with ✎ reach the plan as "Also give it: …". Roles list tool names without counts.
 - A copied type that can't be added says so in the plan and falls back to `general-purpose`.
+- Run asks `Run it in this session?` when the session already has other work (§8), at the owner's request. Claude Code 2.1.314 lists a plugin's skill as `<plugin>:<skill>`, and some of yours by a bare name the Skill tool shows under a prefix: a lead skill matches a command whole, or by the part after the colon when either name has none.
 
 **Agent types**
 - These are errors, never text: a block list (`|`, `>`), text after a closing quote, an empty `tools: []`, and a value that opens with a YAML indicator (anchor, alias, tag, `- ` on the key's line, and the like). A lost `disallowedTools` entry would widen what the agent may do.
@@ -600,3 +622,4 @@ What the build decided beyond this spec, from a probe of Claude Code 2.1.312, th
 - A run agent whose `turn.complete` never comes (remote isolation, internal builds only) stays running.
 - The kept draft has one slot, as Reply's always has.
 - Not live-checked: the light theme and a 22-column sidebar.
+- Below 24 columns the question's first line is cut (`Run it in this sessi…`), so it stays three lines.
