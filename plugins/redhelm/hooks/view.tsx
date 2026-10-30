@@ -990,7 +990,8 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
           // Run's question, in the row's place: three lines at any width, so nothing here wraps.
           <Box key="wf-ask" flexDirection="column">
             <Text wrap="truncate-end">Run it in this session?</Text>
-            <Text color="subtle" wrap="truncate-end">{w.asking}</Text>
+            {/* Under the question, in line with the buttons' labels. */}
+            <Box paddingLeft={compact ? 1 : 2}><Text color="subtle" wrap="truncate-end">{w.asking}</Text></Box>
             <Box columnGap={1}>
               {chip('wf-ask-run', 'Run here', () => act.wfRunHere(s.id), true)}
               {chip('wf-ask-cancel', 'Cancel', act.wfCancelRun)}

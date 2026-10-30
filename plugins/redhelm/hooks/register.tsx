@@ -1208,6 +1208,9 @@ async function runQuestion($: $, w: SavedWorkflow) {
 /** A Run under way: a second press while it registers and fills is ignored, so its mark is never kept as your draft. */
 let running = false
 
+/** The sheet open, told apart from any other: a saved workflow's by its id, a review sheet by its token; '' for none. */
+const sheetOf = (s: SheetState | null) => (s ? `${s.mode} ${s.mode === 'saved' ? s.id : s.token}` : '')
+
 /**
  * Run: copied types registered, then `▶ <name>: ` in the box, where your Enter is the go-ahead. A saved workflow's
  * sheet steps aside for it. When this session already has other work, Run does nothing yet: the workflow's sheet
@@ -1219,13 +1222,20 @@ async function runWorkflow($: $, id: string, ask = true) {
   try {
     const w = (await read($, workflowList))?.workflows.find(x => x.id === id)
     if (!w) return
-    const why = ask ? await runQuestion($, w) : ''
-    if (why) {
+    if (ask) {
+      // The sheet as Run found it. A Save, Close, Back, Delete or another workflow opened while the check reads has
+      // moved on from it: Run then does nothing, neither asking nor running, and the sheet now open stays.
+      const token = sheetToken
+      const before = sheetOf(await read($, workflowSheet))
+      const why = await runQuestion($, w)
       const s = await read($, workflowSheet)
-      if (s?.mode !== 'saved' || s.id !== id) await openWorkflow($, id)
-      // Delete's ask gives way to Run's: the two never show together.
-      await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? { ...cur, armed: undefined, asking: why } : cur))
-      return
+      if (token !== sheetToken || sheetOf(s) !== before) return
+      if (why) {
+        if (s?.mode !== 'saved' || s.id !== id) await openWorkflow($, id)
+        // Delete's ask gives way to Run's: the two never show together.
+        await update($, workflowSheet, cur => (cur?.mode === 'saved' && cur.id === id ? { ...cur, armed: undefined, asking: why } : cur))
+        return
+      }
     }
     await endReply($)
     const { registered, leftBehind } = await registerTypes($, w)

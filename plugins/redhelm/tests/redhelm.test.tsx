@@ -3355,9 +3355,10 @@ describe('editing and running a workflow', () => {
     await ui.press({ key: 'wf-run-build' }); await settle()
     expect(await ui.find({ type: 'Text', text: /^from notes-app$/ })).toBeDefined() // its sheet
     expect(await ui.find({ type: 'Text', text: /^other project · ship missing$/ })).toBeDefined()
-    // Two lines that truncate and a row that cannot wrap: never a fourth row.
-    const rows = (await ui.find({ key: 'wf-ask' }))!.children.map((c: any) => [c.type, c.props.wrap ?? c.props.flexWrap ?? null])
-    expect(rows).toEqual([['Text', 'truncate-end'], ['Text', 'truncate-end'], ['Box', null]])
+    // Two lines that truncate (the reasons in line with the buttons' labels) and a row that cannot wrap: never a fourth row.
+    const rows = (await ui.find({ key: 'wf-ask' }))!.children as any[]
+    expect(rows.map(r => r.type)).toEqual(['Text', 'Box', 'Box'])
+    expect([rows[0].props.wrap, rows[1].props.paddingLeft, rows[1].children[0].props.wrap, rows[2].props.flexWrap]).toEqual(['truncate-end', 1, 'truncate-end', undefined])
     expect(box.text).toBe('')
     await ui.press({ key: 'wf-back' }); await settle()
     await ui.press({ key: 'wf-open-build' }); await settle()
@@ -3365,6 +3366,28 @@ describe('editing and running a workflow', () => {
     await ui.press({ key: 'wf-run-build' }); await settle()
     await ui.press({ key: 'wf-ask-run' }); await settle()
     expect(box.text).toBe('▶ Build: ')
+    await ui.unmount()
+  })
+
+  test('a Save or another workflow opened while the check reads keeps its sheet: no question, no run', async ($: any, on: any) => {
+    const releases: ((v: any) => void)[] = []
+    on('command.list', () => new Promise(r => releases.push(r)))
+    const box = promptBox(on)
+    const tdd = { skills: ['tdd'], playbook: [], briefParts: [] }
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'build', name: 'Build', lead: tdd }), savedOne({ id: 'docs', name: 'Docs', savedAt: 1 })) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-run-build' }); await settle()
+    await ui.press({ key: 'wf-open-docs' }); await settle()
+    releases[0]!({ value: [{ name: 'tdd' }] }); await settle() // nothing applies, and still no run
+    expect([await ui.find({ key: 'wf-ask' }), !!(await ui.find({ key: 'wf-run-docs' })), box.text]).toEqual([undefined, true, ''])
+    await ui.press({ key: 'wf-close' }); await settle()
+    await ui.press({ key: 'wf-run-build' }); await settle()
+    await ui.press({ key: 'wf-save' }); await settle()
+    releases[1]!({ value: [] }); await settle() // tdd missing
+    expect(await ui.find({ type: 'Text', text: /^Save workflow$/ })).toBeDefined()
+    expect([await ui.find({ key: 'wf-ask' }), box.text]).toEqual([undefined, ''])
     await ui.unmount()
   })
 
