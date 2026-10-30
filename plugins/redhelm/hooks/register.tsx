@@ -574,8 +574,8 @@ async function modelsReport($: $) {
       ? switches.slice(-5).reverse().map(s => `  ${span(at - s.at).padStart(4)} ago  ${short(s.from)} → ${short(s.to)}  (${s.source === 'auto' ? 'on its own' : s.source})`)
       : ['  none']),
     '',
-    // Labels, and a workflow's reading and edits, which run whatever the labels setting.
-    `REDhelm's own model calls (labels: ${cfg.labels === 'haiku' ? 'Haiku, low effort' : 'off'}; workflows: Sonnet, low effort): ${spent.calls} ${spent.calls === 1 ? 'request' : 'requests'}, ${kilo(spent.input)} in, ${kilo(spent.output)} out`,
+    // Labels, and a workflow's reading and edits: each has its own setting.
+    `REDhelm's own model calls (labels: ${cfg.labels === 'haiku' ? 'Haiku, low effort' : 'off'}; workflows: ${cfg.workflowReading === 'sonnet' ? 'Sonnet, low effort' : 'off'}): ${spent.calls} ${spent.calls === 1 ? 'request' : 'requests'}, ${kilo(spent.input)} in, ${kilo(spent.output)} out`,
   ]
   return lines.join('\n')
 }
@@ -885,7 +885,10 @@ async function readForSave($: $, back: number): Promise<SaveRead> {
   return { draft: { ...draft, ...(await copyTypes($, [...calls, ...theirs], records, at)) }, trace: leadTrace(msgs, s), script: scriptsIn(msgs, s) }
 }
 
-/** Save (`back` 0) and Earlier: the sheet at once with what was seen, then the reading, which never holds it up. An edit of the draft it replaces ends. */
+/**
+ * Save (`back` 0) and Earlier: the sheet at once with what was seen, then the reading, which never holds it up.
+ * With Workflow reading off nothing is asked: what was seen is the whole draft. An edit of the draft it replaces ends.
+ */
 async function startSave($: $, back: number) {
   await leaveEdit($)
   const token = ++sheetToken
@@ -899,14 +902,16 @@ async function startSave($: $, back: number) {
   // A newer Save or Earlier, or the sheet closed, while the session was read.
   if (token !== sheetToken) return
   const { draft, trace, script } = got
-  await update($, workflowSheet, () => ({ mode: 'review' as const, draft, undo: [], token }))
-  if (draft) void quietly(() => readLead($, token, draft, trace, script))
+  const off = cfg.workflowReading === 'off'
+  await update($, workflowSheet, () => ({ mode: 'review' as const, draft: draft && off ? { ...applyReading(draft, undefined, []), read: 'off' as const } : draft, undo: [], token }))
+  if (draft && !off) void quietly(() => readLead($, token, draft, trace, script))
 }
 
 /**
  * The reading: one call per Save or Earlier, Sonnet at low effort, whatever the labels setting (that is
- * for the dashboard's labels), counted with them. It lands only while the sheet still holds the draft it
- * was asked of, unread; a call that fails or times out leaves the fallbacks and says so.
+ * for the dashboard's labels; Workflow reading turns this one off), counted with them. It lands only
+ * while the sheet still holds the draft it was asked of, unread; a call that fails or times out leaves
+ * the fallbacks and says so.
  */
 async function readLead($: $, token: number, asked: Draft, trace: readonly TraceEvent[], script?: string) {
   let reading: Reading | undefined
@@ -1036,12 +1041,13 @@ const openWorkflowPane = ($: $) => $.ui.open({ id: WORKFLOW_PANE, title: 'Workfl
 
 /**
  * Edit: `✎ Workflow: ` in the box. Not while the reading is out: it names the items as they were when it
- * was asked. `pane`: pressed in the bottom bar's Workflows pane, which holds the keys, so REDhelm closes
+ * was asked; and never with Workflow reading off, which offers no Edit (a press left from before takes
+ * nothing). `pane`: pressed in the bottom bar's Workflows pane, which holds the keys, so REDhelm closes
  * it for them to reach the prompt (as Reply closes the agent sheet) and opens it again once the edit lands.
  */
 async function startEdit($: $, pane: boolean) {
   const s = await read($, workflowSheet)
-  if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending') return
+  if (cfg.workflowReading === 'off' || s?.mode !== 'review' || !s.draft || s.draft.read === 'pending') return
   await endReply($)
   if (!(await takeBox($, EDITING))) return
   await update($, workflowMode, (): WorkflowMode => (pane ? { kind: 'edit', pane: true } : { kind: 'edit' }))
@@ -1086,11 +1092,11 @@ const EDIT_FAILED = "Couldn't apply that edit"
  * labels. Ops that all pass the checks apply, and the draft before them goes on the Undo stack; one that
  * does not leaves the draft and says why in one line, as a refusal (`cannot`) does. No ops change
  * nothing and leave nothing to undo. It lands only on the sheet it was asked of, in the session it was
- * asked in; whether it landed (applied, refused or failed) is the answer.
+ * asked in; whether it landed (applied, refused or failed) is the answer. None is made with Workflow reading off.
  */
 async function applyEdit($: $, gen: number, token: number, ask: string) {
   const s = await read($, workflowSheet)
-  if (gen !== generation || s?.mode !== 'review' || s.token !== token || !s.draft || s.draft.read === 'pending') return false
+  if (cfg.workflowReading === 'off' || gen !== generation || s?.mode !== 'review' || s.token !== token || !s.draft || s.draft.read === 'pending') return false
   let why: string | undefined
   let ops: readonly Op[] = []
   try {
@@ -1370,6 +1376,7 @@ async function view($: $, site?: string): Promise<View> {
     bursts: Object.fromEntries(bursts),
     at: await $.clock.now(),
     motion: cfg.motion === 'on',
+    reading: cfg.workflowReading === 'sonnet',
     mount: site ? (key, spec) => void mounted.set(key, spec) : undefined,
     workflow: await read($, workflowSheet),
     library: await read($, workflowList),
@@ -1525,6 +1532,15 @@ export const register: Register = (on, options) => {
     const mode = typed ? await read($, workflowMode) : null
     // ✎ edits the open draft and never reaches Claude; the change applies off this hook.
     const edit = typed ? EDIT_MARK.exec(e.text) : null
+    // With Workflow reading off no edit is asked: a ✎ mode left from before ends, your draft back, and ✎ text is
+    // still never Claude's while the review sheet is open.
+    if (edit && cfg.workflowReading === 'off' && (mode?.kind === 'edit' || (await read($, workflowSheet))?.mode === 'review')) {
+      if (mode?.kind === 'edit') await quietly(async () => {
+        await update($, workflowMode, () => null)
+        fillBack($, (await takeDraft($)) ?? '')
+      })
+      return { drop: 'REDhelm: Edit is off · Workflow reading is off in /config' }
+    }
     if (edit && mode?.kind === 'edit') {
       const ask = (edit[1] ?? '').trim()
       // The mode stays, and Claude Code keeps the dropped text: the change can still be typed.

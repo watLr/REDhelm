@@ -98,6 +98,8 @@ export type View = {
   at: number
   /** Moving traces and the question flash; off, Rasters give way to still text. */
   motion: boolean
+  /** Workflow reading (/config): off, no edit can be asked, and the review sheet offers no Edit. */
+  reading: boolean
   /** Told of every Raster drawn, so the frame loop repaints it. */
   mount?: (key: string, spec: TraceSpec) => void
   /**
@@ -938,7 +940,8 @@ function WorkflowParts({ els, v, act, d, detail, room, stacked, review }:
  * The workflow sheet, drawn in the panel (or the bottom bar's pane) in place of what was there. `back`:
  * drawn inside a panel, with Back to it.
  * - The review sheet a Save opens: what REDhelm saw at once, and what it read of the session a few
- *   seconds later, under `Reading…`; each fact marked `seen` or `read`. Edit takes the change in the
+ *   seconds later, under `Reading…`; each fact marked `seen` or `read`. With Workflow reading off, what
+ *   it saw is the whole draft, with no mark or warning, and no Edit. Edit takes the change in the
  *   prompt box (`Applying…` while it applies) and Undo steps back one change. Nothing changes while
  *   the reading is out: it names the items as they were when it was asked. Save and Earlier wait out
  *   an edit applying, and a form with no items has no Save.
@@ -1022,7 +1025,7 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
       <WorkflowParts els={els} v={v} act={act} d={d} detail={w.detail} room={room} stacked={stacked} review={{ remove: !pending && !busy && items > 1 }} />
       <Box columnGap={1} rowGap={1} flexWrap="wrap">
         {items > 0 && !busy && chip('wf-keep', 'Save', act.wfKeep, true)}
-        {!pending && chip('wf-edit', 'Edit', act.wfEdit)}
+        {!pending && v.reading && chip('wf-edit', 'Edit', act.wfEdit)}
         {!pending && !busy && w.undo.length > 0 && chip('wf-undo', 'Undo', act.wfUndo)}
         {d.more && !busy && chip('wf-earlier', 'Earlier', act.wfEarlier)}
         {cancel}

@@ -171,7 +171,8 @@ export type Draft = Omit<SavedWorkflow, 'version' | 'id' | 'savedAt'> & {
   notCopied: string[]
   /** Per practice, the trace lines it cites. For the sheet; never saved. */
   evidence: string[][]
-  read: 'pending' | 'done' | 'failed'
+  /** `off`: Workflow reading is off in /config, so nothing was asked and the draft is what was seen. */
+  read: 'pending' | 'done' | 'failed' | 'off'
   /** How many times Earlier widened the stretch, and whether it can again. */
   back: number
   more: boolean

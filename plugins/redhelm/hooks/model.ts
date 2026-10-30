@@ -13,6 +13,8 @@ export type Settings = {
   motion: 'on' | 'off'
   /** Headlines and question titles from the small model, or REDhelm's plain words only. */
   labels: 'haiku' | 'plain'
+  /** A Save's reading and Edit, from Claude Code's Sonnet; off, Save keeps only what it saw and Edit is not offered. */
+  workflowReading: 'sonnet' | 'off'
   /** What REDhelm draws behind itself in the sidebar (terminal): see hooks/backdrop.ts. */
   backdrop: 'ripples' | 'lattice' | 'field' | 'ember' | 'none'
 }
@@ -29,6 +31,7 @@ export const settings = (o: Record<string, unknown> = {}): Settings => ({
   agentToasts: o.agentToasts !== false,
   motion: pick(o.motion, ['on', 'off'] as const, 'on'),
   labels: pick(o.labels, ['haiku', 'plain'] as const, 'haiku'),
+  workflowReading: pick(o.workflowReading, ['sonnet', 'off'] as const, 'sonnet'),
   backdrop: pick(o.backdrop, ['ripples', 'lattice', 'field', 'ember', 'none'] as const, 'ripples'),
 })
 

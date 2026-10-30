@@ -115,7 +115,7 @@ A session that went well had a lead and a team. **Workflows**, at the foot of th
   - the tools and skills each role or agent used
   - the project's own agent types, copied, so they travel to other projects (their hooks, MCP servers and permission mode stay behind)
 
-  Each item is either seen in the session or read from it by Claude Code's model, which fills in a few seconds later; a practice opens on the steps it was read from. Open a role or an agent for its details; **Remove** drops it. **Earlier** adds the stretch before. **Edit** changes the draft in plain words through the prompt box: it fills with `✎ Workflow: `, what you write there never reaches Claude, and what you were writing to Claude comes back after. **Undo** steps back one change. **Save** keeps it.
+  Each item is either seen in the session or read from it by Claude Code's model, which fills in a few seconds later; a practice opens on the steps it was read from. With **Workflow reading** off in `/config`, the sheet holds only what was seen, and **Edit** is not offered. Open a role or an agent for its details; **Remove** drops it. **Earlier** adds the stretch before. **Edit** changes the draft in plain words through the prompt box: it fills with `✎ Workflow: `, what you write there never reaches Claude, and what you were writing to Claude comes back after. **Undo** steps back one change. **Save** keeps it.
 - **Load and Run.** **Load** lists your workflows, this project's first. Open one to see it, with **Run** and **Delete**. **Run** puts `▶ <name>: ` in the prompt box. Add notes for this run if you like and press Enter: your prompt goes to Claude with the plan written out under it, so the conversation shows everything Claude got, and Claude leads the work from it.
 - **What it never saves.** Loops, rounds, checks, commands, file lists, agents' answers, the conversation. A practice says when it applies, and Claude decides each time whether it fits.
 - **Where it's saved.** `~/.claude/redhelm/workflows/`, one file a workflow, never in the project.
@@ -172,6 +172,7 @@ Every option is a row in `/config`:
 | Background (sidebar, terminal) | ripples · lattice · field · ember · none | ripples |
 | Motion: traces move, a new question's edge flashes | on · off | on |
 | Labels: headlines and question titles | haiku · plain | haiku |
+| Workflow reading: Save's reading and Edit | sonnet · off | sonnet |
 | When the model changes without you | hold · warn · off | hold |
 | REDhelm line under the prompt | off · problems · always | off |
 | Desktop notification after (seconds) | number, 0 = off | 120 |
@@ -217,7 +218,7 @@ REDhelm reads your project folder and Claude Code's own session data on your mac
 
 - **Update check.** A few times a day it reads REDhelm's published version number from GitHub. It sends nothing about you or your work. Only a copy installed from REDhelm's own marketplace checks.
 - **Labels.** While REDhelm is on screen, it asks Claude Code's small model (Haiku, low effort) for short headlines and question titles. Each request carries an agent's task (first 300 characters), its latest steps and words, or a question an agent asked. It goes through Claude Code, to the same provider as the rest of your session, and counts toward your usage: a few hundred tokens each. One request at a time; an agent's headline is asked for again only when its steps change, at most every 45 seconds; no more than 30 requests an hour; answers are reused. `/redhelm models` shows what labels used. Set **Labels** to plain to turn them off.
-- **Workflows.** Only when you ask, whatever the **Labels** setting. **Save** (and each **Earlier**) makes one request to Claude Code's Sonnet (low effort): it carries your prompts and each agent's brief at their first 300 characters, each agent's description, the skills the lead loaded, its steps (a command as its program and subcommand only), and the first 6,000 characters of any workflow script it ran. Each edit you send makes one more Sonnet request, carrying the draft with its briefs and shared brief parts whole (up to 6,000 characters each) and what you asked. Both go through Claude Code like the labels, count toward your usage, and are counted in `/redhelm models`.
+- **Workflows.** Only when you ask; set **Workflow reading** to off to turn them off. **Save** (and each **Earlier**) makes one request to Claude Code's Sonnet (low effort): it carries your prompts and each agent's brief at their first 300 characters, each agent's description, the skills the lead loaded, its steps (a command as its program and subcommand only), and the first 6,000 characters of any workflow script it ran. Each edit you send makes one more Sonnet request, carrying the draft with its briefs and shared brief parts whole (up to 6,000 characters each) and what you asked. Both go through Claude Code like the labels, count toward your usage, and are counted in `/redhelm models`.
 
 REDhelm runs only in interactive sessions (`claude -p`, the SDK and other headless runs are left alone), and if it ever errors, the call it was watching goes through unchanged.
 

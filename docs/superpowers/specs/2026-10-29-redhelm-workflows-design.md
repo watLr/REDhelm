@@ -471,6 +471,8 @@ It has no heading in the sidebar, so nothing on screen changes.
   registered (§9).
 - The reading and edit calls go to Claude Code's own model, the channel REDhelm's labels use;
   your prompts reach it as their first 300 characters, commands as program and subcommand.
+- **Workflow reading** in `/config` (`sonnet`, the default, or `off`) turns both calls off: Save
+  keeps only what was seen, complete at once, and Edit is not offered.
 - Tests use made-up conversations only.
 
 ## 14. Code shape
@@ -588,6 +590,9 @@ What the build decided beyond this spec, from a probe of Claude Code 2.1.312, th
 - Run ignores a second press while one is in flight. An open library list refreshes after a Save. Removing the last item, or saving an empty workflow, is not offered.
 
 **`/redhelm models`** now names REDhelm's own model calls, labels and workflows alike.
+
+**Workflow reading**
+- A setting, `workflowReading` (`sonnet` or `off`, default `sonnet`), turns the reading and the edit calls off, as CONTRIBUTING asks of each new kind of model call. Off, Save and Earlier ask nothing: the draft is what was seen, complete at once (`read: 'off'`), with no `read` mark and no warning, which is for a reading that failed. Edit is not offered, and a ✎ mode left from before, or ✎ typed while the sheet is open, is dropped with no call. `/redhelm models` says `workflows: off`.
 
 **Known gaps**
 - A quoted whole-value list that opens with an indicator (`tools: "*"`) is rejected: the type falls back, saying so.

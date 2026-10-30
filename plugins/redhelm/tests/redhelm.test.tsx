@@ -264,7 +264,7 @@ describe('the pane', () => {
 describe('the rack', () => {
   test('orders strips by who needs you next and pulls out the ones that do', async () => {
     const v = {
-      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null,
+      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, reading: true, workflow: null, library: null,
       agents: [
         agent({ id: 'run', startedAt: 1 }),
         agent({ id: 'done', status: 'completed', endedAt: 5 }),
@@ -333,8 +333,10 @@ describe('what REDhelm brings to Claude Code', () => {
 
 describe('your REDhelm settings', () => {
   test('missing or unknown values fall back to the defaults', async () => {
-    expect(settings()).toEqual({ placement: 'right', statusLine: 'off', guard: 'hold', notifyAfter: 120, autoOpen: true, agentToasts: true, motion: 'on', labels: 'haiku', backdrop: 'ripples' })
-    expect(settings({ motion: 'off', labels: 'plain' })).toMatchObject({ motion: 'off', labels: 'plain' })
+    expect(settings()).toEqual({ placement: 'right', statusLine: 'off', guard: 'hold', notifyAfter: 120, autoOpen: true, agentToasts: true, motion: 'on', labels: 'haiku',
+      workflowReading: 'sonnet', backdrop: 'ripples' })
+    expect(settings({ motion: 'off', labels: 'plain', workflowReading: 'off' })).toMatchObject({ motion: 'off', labels: 'plain', workflowReading: 'off' })
+    expect(settings({ workflowReading: 'haiku' }).workflowReading).toBe('sonnet')
     expect(settings({ placement: 'left', notifyAfter: -5, autoOpen: false })).toMatchObject({ placement: 'right', notifyAfter: 120, autoOpen: false })
   })
 
@@ -491,7 +493,7 @@ describe('messaging an agent', () => {
 })
 
 describe('what REDhelm chooses to show', () => {
-  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null }
+  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, reading: true, workflow: null, library: null }
 
   test("only this session's workflows, or ones an agent here is changing; finished runs stay quiet", async () => {
     const ws = (dir: string, extra: object) => ({ dir, name: dir.split('/').pop()!, ...extra })
@@ -3320,6 +3322,71 @@ describe('editing and running a workflow', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'wf-save' }); await settle()
     expect(await ui.find({ type: 'Text', text: /store-reviewer · type copied/ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('Workflow reading', () => {
+  const OFF = { options: { workflowReading: 'off' } } as any
+  const models = async ($: any) => (await $.command.run({ command: 'redhelm', args: 'models', origin: { kind: 'person' }, presentation: {} } as any)).text as string
+
+  test('off: Save and Earlier ask nothing, and what was seen is the draft, shown quietly and saved', OFF, async ($: any, on: any) => {
+    const asked: any[] = []
+    const writes = setup(on, { asked, said: [you('one'), lead(call('a1')), you('two'), lead(call('a2', { description: 'Add tests' }))] })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect((await ui.find({ key: 'wf-item-0' }))?.text).toMatch(/Add tests/)
+    await ui.press({ key: 'wf-earlier' }); await settle()
+    expect((await ui.find({ key: 'wf-item-0' }))?.text).toMatch(/Write the docs/)
+    // Complete at once: no Reading…, no `read` mark, and no warning, which is for a reading that failed.
+    for (const text of [/^Reading…$/, /^read$/, /Couldn't read/]) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
+    expect(await ui.find({ key: 'wf-edit' })).toBeUndefined()
+    expect(asked).toEqual([])
+    await ui.press({ key: 'wf-keep' }); await settle()
+    expect(JSON.parse(Object.values(writes)[0]!)).toMatchObject({ name: 'Write the docs, Add tests', purpose: '', lead: { playbook: [] }, stages: [{ agents: [{ label: 'Write the docs' }] }, { agents: [{ label: 'Add tests' }] }] })
+    expect(await models($)).toMatch(/\nREDhelm's own model calls \(labels: Haiku, low effort; workflows: off\): 0 requests, /)
+    await ui.unmount()
+  })
+
+  test('off: ✎ text, or a ✎ mode left from before, asks nothing and never reaches Claude', OFF, async ($: any, on: any) => {
+    const asked: any[] = []
+    const box = promptBox(on)
+    // A ✎ mode from before Workflow reading was turned off (a change in /config reloads REDhelm; its session state stays), until REDhelm writes the mode.
+    let stale = false
+    on('state.get', async (_$: any, e: any, next: any) => {
+      const r = await next(e)
+      return stale && e.plugin === 'redhelm' && e.key === 'workflowMode' ? { value: { ...r.value, value: { kind: 'edit' } } } : r
+    })
+    on('state.set', (_$: any, e: any, next: any) => ((e.plugin === 'redhelm' && e.key === 'workflowMode' && (stale = false)), next(e)))
+    setup(on, { asked })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    stale = true
+    const off = 'REDhelm: Edit is off · Workflow reading is off in /config'
+    expect((await $.prompt.submit({ text: '✎ Workflow: drop the review' })).drop).toBe(off)
+    expect(stale).toBe(false) // the mode ended
+    await clock.advance(200); await settle()
+    expect((await $.prompt.submit({ text: '✎ Workflow: drop the review' })).drop).toBe(off) // typed by hand, the sheet open
+    await clock.advance(200); await settle()
+    expect(asked).toEqual([])
+    expect(box.passed).toEqual([])
+    expect(await ui.find({ key: 'wf-item-2' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('sonnet, the default: one reading per Save, and Edit is offered', { options: { workflowReading: 'sonnet' } } as any, async ($: any, on: any) => {
+    const asked: any[] = []
+    setup(on, { asked })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle()
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toMatchObject(READING_CALL)
+    expect(await ui.find({ type: 'Text', text: /^Tests, then a review$/ })).toBeDefined()
+    expect(await ui.find({ key: 'wf-edit' })).toBeDefined()
+    expect(await models($)).toMatch(/workflows: Sonnet, low effort\): 1 request, /)
     await ui.unmount()
   })
 })

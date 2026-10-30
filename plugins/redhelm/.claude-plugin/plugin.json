@@ -81,6 +81,16 @@
       ],
       "default": "haiku"
     },
+    "workflowReading": {
+      "type": "string",
+      "title": "REDhelm workflow reading",
+      "description": "Sonnet: Save asks Claude Code's Sonnet (low effort) to read how the lead worked (one request each Save or Earlier; each Edit is one more). Off: Save shows only what REDhelm saw in the session, and Edit is not offered.",
+      "options": [
+        "sonnet",
+        "off"
+      ],
+      "default": "sonnet"
+    },
     "backdrop": {
       "type": "string",
       "title": "REDhelm background",
