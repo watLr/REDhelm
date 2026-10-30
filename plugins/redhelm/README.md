@@ -32,7 +32,7 @@ Restart running sessions (`/restart`), then run `/redhelm` once to open it. Afte
 
 ## Privacy and cost
 
-REDhelm reads your project folder and Claude Code's session data on your machine, and keeps what it remembers there too. Installed from its own marketplace, it checks GitHub a few times a day for a newer version, sending nothing about you; from the plugin directory, the directory's updates apply instead. Headlines are short requests to Claude Code's small model that count toward your usage; set **Labels** to plain in `/config` to turn them off. A workflow's **Save** and **Edit** ask Claude Code's Sonnet, only when you press them; set **Workflow reading** to off to turn that off. The details are in the [main README](https://github.com/watLr/redhelm#privacy-and-cost).
+REDhelm reads your project folder and Claude Code's session data on your machine, and keeps what it remembers there too. Installed from its own marketplace, it checks GitHub a few times a day for a newer version, sending nothing about you; from the plugin directory, the directory's updates apply instead. Headlines are short requests to Claude Code's small model that count toward your usage; set **Labels** to plain in `/config` to turn them off. Each message an agent sends you is read once by the small model, to tell a question from a report. A workflow's **Save** and **Edit** ask Claude Code's Sonnet, only when you press them; set **Workflow reading** to off to turn that off. No analytics, no telemetry, no server of REDhelm's own. The details are in the [privacy policy](https://github.com/watLr/redhelm/blob/main/PRIVACY.md).
 
 ## More
 

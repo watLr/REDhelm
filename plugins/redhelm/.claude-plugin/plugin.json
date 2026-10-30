@@ -9,6 +9,7 @@
   "homepage": "https://github.com/watLr/redhelm",
   "repository": "https://github.com/watLr/redhelm",
   "license": "MIT",
+  "privacyPolicyUrl": "https://github.com/watLr/redhelm/blob/main/PRIVACY.md",
   "types": "./types/index.d.ts",
   "userConfig": {
     "placement": {
