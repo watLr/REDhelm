@@ -8,8 +8,8 @@ import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
 import { BUCKET_MS, BUCKETS, burst, isMoving, record, spectrum, traceRaster, type Burst } from './trace'
 import { Alert, Backdropped, Panel, Sheet, WorkflowSheet, WorkflowsSection, clockFace, hue, type Actions, type Els, type TraceSpec, type View } from './view'
-import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, widen,
-  type Call, type Msg, type Reading, type Stretch, type TraceEvent } from './workflows'
+import { READING_CALL, agentCalls, applyReading, checkReading, compact, leadTrace, readingRequest, readWorkflow, runCalls, stretches, toolKey, usedIn, widen,
+  type Call, type Msg, type Reading, type Stretch, type TraceEvent, type Used } from './workflows'
 import { EDIT_CALL, applyOps, checkOps, editRequest, itemCount, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
   type Op } from './library'
 import { agentSpec, typeName } from './agentfile'
@@ -95,9 +95,6 @@ async function note($: $, n: Omit<Note, 'at'>) {
   const at = await $.clock.now()
   await update($, notes, list => [...list, { ...n, at }].slice(-40))
 }
-
-/** The name an agent's tool calls are counted under: an MCP tool by its server, `mcp:notes`. */
-const toolKey = (tool: string) => (tool.startsWith('mcp__') ? `mcp:${tool.split('__')[1]}` : tool)
 
 /** What an agent is called in REDhelm's messages and in the "→ name:" address. */
 const labelOf = (a?: Agent) => a?.name || excerpt(a?.description, 24) || a?.type || 'agent'
@@ -853,8 +850,10 @@ type SaveRead = { draft?: Draft; trace: TraceEvent[]; script?: string }
 
 /**
  * The session as Save reads it: the main conversation; REDhelm's records; the own conversation of each
- * top-level agent that started agents (its team), one it cannot read counting as none; the lead's model
- * and effort from the guard; and the project's types the agents ran as.
+ * top-level agent that started agents (its team), and of each whose record holds no tools (REDhelm did not
+ * watch it, or let its record go), for what it used and its team; one it cannot read counting as none; the
+ * lead's model and effort from the guard; and the project's types the agents ran as. A run's agent whose
+ * record was let go is not among them: only its record names it.
  */
 async function readForSave($: $, back: number): Promise<SaveRead> {
   const msgs = asMsgs(await $.session.messages())
@@ -862,16 +861,25 @@ async function readForSave($: $, back: number): Promise<SaveRead> {
   const list = stretches(msgs)
   const s = widen(list, back)
   const calls = [...agentCalls(msgs, s), ...runCalls(msgs, s, records)]
-  const teams: Record<string, Msg[]> = {}
-  for (const c of calls) {
-    const r = Object.hasOwn(records, c.agentId) ? records[c.agentId] : undefined
-    if (!r || r.parent || !r.tools?.Agent) continue
+  const recordOf = (id: string) => (Object.hasOwn(records, id) ? records[id] : undefined)
+  // Read side by side, kept in the calls' order.
+  const owns = await Promise.all(calls.map(async c => {
+    const r = recordOf(c.agentId)
+    if (r?.parent || (r?.tools && !r.tools.Agent)) return undefined
     const own = await $.session.messages({ agentId: c.agentId }).catch(() => undefined)
-    if (Array.isArray(own)) teams[c.agentId] = asMsgs(own)
-  }
+    return Array.isArray(own) ? asMsgs(own) : undefined
+  }))
+  const teams: Record<string, Msg[]> = {}
+  const used: Record<string, Used> = {}
+  calls.forEach((c, k) => {
+    const own = owns[k]
+    if (!own) return
+    teams[c.agentId] = own
+    if (!recordOf(c.agentId)?.tools) used[c.agentId] = usedIn(own)
+  })
   const g = await read($, guard)
   const at = root || (await $.session.root())
-  const draft = readWorkflow({ msgs, records, teams, list, back, root: at, lead: { model: g.model, effort: g.effort } })
+  const draft = readWorkflow({ msgs, records, teams, used, list, back, root: at, lead: { model: g.model, effort: g.effort } })
   if (!draft) return { trace: [] }
   const theirs = Object.values(teams).flatMap(own => agentCalls(own, { from: 0, to: own.length, led: false }))
   return { draft: { ...draft, ...(await copyTypes($, [...calls, ...theirs], records, at)) }, trace: leadTrace(msgs, s), script: scriptsIn(msgs, s) }
@@ -951,6 +959,7 @@ async function writeWorkflow($: $, d: Draft) {
  * Save on the sheet. Pressed while the reading is out, it keeps what was seen; while an edit applies it
  * waits for you to press it again, so the edit you asked for is never dropped. A write that fails says
  * why and leaves the sheet open. A form with no items is never saved (the sheet offers no Save for either).
+ * A library list on show is read again, so it holds what was just saved.
  */
 async function keepWorkflow($: $) {
   const s = await read($, workflowSheet)
@@ -969,6 +978,7 @@ async function keepWorkflow($: $) {
   await update($, workflowSheet, cur => (cur?.mode === 'review' && cur.token === s.token ? null : cur))
   await leaveEdit($)
   $.ui.toast(`Saved · ${name}`)
+  if (await read($, workflowList)) await listLibrary($, true)
 }
 
 /**
@@ -1105,19 +1115,22 @@ async function applyEdit($: $, gen: number, token: number, ask: string) {
   return landed
 }
 
-/**
- * Load: the library as its folder holds it now, this project's first, then newest; pressed again, the
- * list goes. A file that cannot be read counts with those that do not parse; a blank (deleted) one does not.
- */
+/** Load: the library listed; pressed again, the list goes. */
 async function loadLibrary($: $) {
-  if (await read($, workflowList)) {
-    await update($, workflowList, () => null)
-    return
-  }
+  if (await read($, workflowList)) await update($, workflowList, () => null)
+  else await listLibrary($)
+}
+
+/**
+ * The library as its folder holds it now, this project's first, then newest. A file that cannot be read
+ * counts with those that do not parse; a blank (deleted) one does not. `again`: only a list still on show
+ * is replaced, so one put away while the folder was read stays away.
+ */
+async function listLibrary($: $, again = false) {
   try {
     const { files } = await libraryFiles($)
     const got = listed(files.flatMap(f => (f.text === undefined ? [] : [{ name: f.name, text: f.text }])), projectKey(root || (await $.session.root())))
-    await update($, workflowList, () => ({ ...got, unreadable: got.unreadable + files.filter(f => f.text === undefined).length }))
+    await update($, workflowList, cur => (again && !cur ? cur : { ...got, unreadable: got.unreadable + files.filter(f => f.text === undefined).length }))
   } catch (err) {
     $.ui.toast(`Couldn't read the library · ${failure(err)}`)
   }
@@ -1360,7 +1373,6 @@ async function view($: $, site?: string): Promise<View> {
     mount: site ? (key, spec) => void mounted.set(key, spec) : undefined,
     workflow: await read($, workflowSheet),
     library: await read($, workflowList),
-    mode: await read($, workflowMode),
   }
 }
 
@@ -1527,8 +1539,10 @@ export const register: Register = (on, options) => {
       return { drop: '✎ Workflow: applying' }
     }
     // ✎ text while an edit is still out, or the review sheet is open, is never Claude's: for the 100 ms before your
-    // draft comes back the box still holds the edit just sent, and an Enter there must not send it on.
-    if (edit && (edits > 0 || (await read($, workflowSheet))?.mode === 'review')) return { drop: '✎ Workflow: applying' }
+    // draft comes back the box still holds the edit just sent, and an Enter there must not send it on. Typed by
+    // hand with no edit out, nothing applies it: Edit is how one starts.
+    if (edit && edits > 0) return { drop: '✎ Workflow: applying' }
+    if (edit && (await read($, workflowSheet))?.mode === 'review') return { drop: 'REDhelm: press Edit first' }
     // ▶ runs the saved workflow Run chose: your notes as the prompt, the workflow as a plan beside it.
     const notes = mode?.kind === 'run' ? runNotes(e.text, mode.name) : undefined
     if (mode?.kind === 'run' && notes !== undefined) {
@@ -1565,8 +1579,9 @@ export const register: Register = (on, options) => {
     // again, and an open reply or workflow mode stays open, its draft still kept.
     const why = await held()
     if (why) return { drop: why }
-    // A prompt to Claude while a reply or a workflow's mode was open (its mark was deleted): it is over.
-    const replyOver = !address && !!(await $.state.get(COMPOSING)).value
+    // A prompt you typed to Claude while a reply or a workflow's mode was open (its mark was deleted): it is over.
+    // A notification or a peer's message is not yours: an open reply stays, and its kept draft is not put back over it.
+    const replyOver = typed && !address && !!(await $.state.get(COMPOSING)).value
     if (replyOver || mode) {
       const draft = await takeDraft($)
       if (replyOver) await update($, composing, () => null)

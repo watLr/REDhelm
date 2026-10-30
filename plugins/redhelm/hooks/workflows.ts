@@ -20,8 +20,8 @@ export type Call = { at: number; agentId: string; input: AgentInput }
 
 /** How a background task's finish (an agent's or a workflow's) reaches the lead: a user message that begins with this. */
 const NOTICE = '<task-notification>'
-/** How a user message you did not write begins: a finished agent, a command's output, a reminder, an interruption. */
-const NOT_YOURS = [NOTICE, '<local-command', '<system-reminder>', '[Request interrupted']
+/** How a user message that is no prompt of yours begins: a finished agent, a command's output, a `!` command and its output, a reminder, an interruption. */
+const NOT_YOURS = [NOTICE, '<local-command', '<bash-', '<system-reminder>', '[Request interrupted']
 
 /** Whether a message is a prompt you wrote. A `/` command is one. */
 export function isPrompt(m: Msg) {
@@ -307,6 +307,38 @@ function addSkills(into: string[], from: readonly string[] | undefined) {
 
 const someOrNone = <T>(xs: T[]) => (xs.length ? xs : undefined)
 
+/** The name an agent's tool calls are counted under: an MCP tool by its server, `mcp:notes`. */
+export const toolKey = (tool: string) => (tool.startsWith('mcp__') ? `mcp:${tool.split('__')[1]}` : tool)
+
+/** What an agent used: its tool calls counted by toolKey, and the skills it loaded, once each, in order. */
+export type Used = { tools: Record<string, number>; skills: string[] }
+
+/**
+ * What an agent's own conversation shows it used, counted as REDhelm's records count it live: every tool
+ * call (one that failed or was refused too) under its toolKey, and each Skill call's skill when new. For an
+ * agent REDhelm did not watch, or whose record it let go.
+ */
+export function usedIn(own: readonly Msg[]): Used {
+  const tools: Record<string, number> = {}
+  const skills: string[] = []
+  for (const m of own) {
+    if (m.role !== 'assistant') continue
+    for (const u of m.toolUses) {
+      const k = toolKey(u.tool)
+      tools[k] = (Object.hasOwn(tools, k) ? tools[k]! : 0) + 1
+      const name = u.tool === 'Skill' ? u.input.skill : undefined
+      if (typeof name === 'string' && name) addSkills(skills, [name])
+    }
+  }
+  return { tools, skills }
+}
+
+/** What an agent used: as REDhelm recorded it, or, where its record holds no tools, as its own conversation shows. */
+function usedBy(id: string, records: Record<string, Agent>, used: Record<string, Used>): Partial<Used> | undefined {
+  const r = records[id]
+  return r?.tools ? r : Object.hasOwn(used, id) ? used[id] : r
+}
+
 /** The agents an agent started in its own conversation. */
 const ownCalls = (own: readonly Msg[] | undefined) => (own ? agentCalls(own, { from: 0, to: own.length, led: false }) : [])
 
@@ -317,9 +349,10 @@ const setupOf = (i: AgentInput) => JSON.stringify([typeOf(i), i.model, i.effort,
  * The agents as roles, in the order each setup first ran: `ran` counts the agents that filled it,
  * their tools are summed and their skills joined. Labelled by type (a plugin's by its own name, after
  * the colon, and two of one type told apart) until the reading names them; the role line is the
- * reading's. With `teams`, each role gets the roles its agents' own agents filled.
+ * reading's. With `teams`, each role gets the roles its agents' own agents filled. `used`: what an agent
+ * whose record holds no tools used, by its id, as its own conversation shows.
  */
-export function groupRoles(calls: readonly Call[], records: Record<string, Agent>, teams?: Record<string, readonly Msg[]>): SavedRole[] {
+export function groupRoles(calls: readonly Call[], records: Record<string, Agent>, teams?: Record<string, readonly Msg[]>, used: Record<string, Used> = {}): SavedRole[] {
   const groups = new Map<string, Call[]>()
   for (const c of calls) {
     const k = setupOf(c.input)
@@ -340,8 +373,8 @@ export function groupRoles(calls: readonly Call[], records: Record<string, Agent
       isolation: first.isolation,
       background: group.some(c => !!c.input.run_in_background),
       teammate: group.some(c => !!of(c)?.teammate),
-      tools: group.reduce((t, c) => addTools(t, of(c)?.tools), {}),
-      skills: group.reduce((s: string[], c) => addSkills(s, of(c)?.skills), []),
+      tools: group.reduce((t, c) => addTools(t, usedBy(c.agentId, records, used)?.tools), {}),
+      skills: group.reduce((s: string[], c) => addSkills(s, usedBy(c.agentId, records, used)?.skills), []),
       ran: group.length,
       team: teams && someOrNone(groupRoles(group.flatMap(c => ownCalls(teams[c.agentId])), records)),
     })
@@ -353,10 +386,11 @@ export function teamOf(own: readonly Msg[] | undefined, records: Record<string, 
   return someOrNone(groupRoles(ownCalls(own), records))
 }
 
-/** An agent in the lineup: its call as given, with what REDhelm recorded of its tools and skills. */
-function savedAgent(c: Call, records: Record<string, Agent>, teams: Record<string, readonly Msg[]>): SavedAgent {
+/** An agent in the lineup: its call as given, with its tools and skills as REDhelm recorded them, or else as its own conversation shows. */
+function savedAgent(c: Call, records: Record<string, Agent>, teams: Record<string, readonly Msg[]>, used: Record<string, Used>): SavedAgent {
   const i = c.input
   const r = records[c.agentId]
+  const u = usedBy(c.agentId, records, used)
   return compact({
     label: labelOf(i.description || typeOf(i)),
     description: i.description ?? '',
@@ -368,8 +402,8 @@ function savedAgent(c: Call, records: Record<string, Agent>, teams: Record<strin
     background: !!i.run_in_background,
     teammate: !!r?.teammate,
     isolation: i.isolation,
-    tools: addTools({}, r?.tools),
-    skills: addSkills([], r?.skills),
+    tools: addTools({}, u?.tools),
+    skills: addSkills([], u?.skills),
     team: teamOf(teams[c.agentId], records),
   })
 }
@@ -569,6 +603,8 @@ export type ReadInput = {
   records: Record<string, Agent>
   /** Each top-level agent's own conversation, by its id, for its team. */
   teams: Record<string, readonly Msg[]>
+  /** What each top-level agent whose record holds no tools used, by its id, as its own conversation shows (usedIn). A record with tools wins. */
+  used?: Record<string, Used>
   list: readonly Stretch[]
   /** How many times Earlier widened the latest stretch. */
   back: number
@@ -582,7 +618,7 @@ export type ReadInput = {
  * parts, its agents as roles and as the lineup (both, so `Save as` switches without reading again,
  * each with its labels told apart), and nothing read yet. Undefined when the stretch holds no agent work.
  */
-export function readWorkflow({ msgs, records, teams, list, back, root, lead }: ReadInput): Draft | undefined {
+export function readWorkflow({ msgs, records, teams, used = {}, list, back, root, lead }: ReadInput): Draft | undefined {
   const s = widen(list, back)
   // A run's agents go after the lead's own up to the message that started the run (the sort is stable).
   const calls = [...agentCalls(msgs, s), ...runCalls(msgs, s, records)].sort((a, b) => a.at - b.at)
@@ -596,8 +632,8 @@ export function readWorkflow({ msgs, records, teams, list, back, root, lead }: R
     projectKey: hash(root),
     lead: compact({ skills: leadSkills(msgs, s), playbook: [], briefParts: sharedParts(calls.map(c => c.input.prompt ?? '')), model: lead.model, effort: lead.effort }),
     form: defaultForm(msgs, s),
-    roles: groupRoles(calls, records, teams),
-    stages: lineupApart(stages.map(st => ({ agents: st.map(c => savedAgent(c, records, teams)) }))),
+    roles: groupRoles(calls, records, teams, used),
+    stages: lineupApart(stages.map(st => ({ agents: st.map(c => savedAgent(c, records, teams, used)) }))),
     types: [],
     folded,
     notCopied: [],

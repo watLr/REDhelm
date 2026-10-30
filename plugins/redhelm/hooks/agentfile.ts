@@ -69,10 +69,14 @@ const lf = (text: string) => text.replace(/\r\n?/g, '\n')
 
 /**
  * A plain or quoted value: quotes taken off (with their escapes), a ` # comment` after it dropped.
- * Undefined when anything but a comment follows a closing quote: `"Read" Grep` is no value.
+ * Undefined when anything but a comment follows a closing quote: `"Read" Grep` is no value. Undefined
+ * too for a plain value that opens with a YAML anchor (`&deny`), alias (`*deny`) or tag (`!!str`): YAML
+ * reads those as marks, never as text, so what they stand for is unknown here; `&deny Bash` read as a
+ * name would let the agent use the Bash its file denies.
  */
 function scalar(raw: string): string | undefined {
   const t = raw.trim()
+  if (/^[&*!]/.test(t)) return undefined
   const dq = /^"((?:[^"\\]|\\.)*)"/.exec(t)
   const sq = dq ? undefined : /^'((?:[^']|'')*)'/.exec(t)
   const quoted = dq ?? sq

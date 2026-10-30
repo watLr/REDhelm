@@ -13,7 +13,7 @@ import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail }
 import { clean, hash, labeler, type Complete } from '../hooks/labels'
 import { PALETTES, animates, backdrop as drawBackdrop, isLattice } from '../hooks/backdrop'
 import { agentCalls, applyReading, checkReading, command, defaultForm, foldRepeats, groupRoles, isPrompt, leadSkills, leadTrace, readingRequest, readWorkflow,
-  READING_CALL, READING_SYSTEM, distinctLabels, runCalls, sharedParts, stagesOf, stretches, teamOf, widen, type Msg } from '../hooks/workflows'
+  READING_CALL, READING_SYSTEM, distinctLabels, runCalls, sharedParts, stagesOf, stretches, teamOf, usedIn, widen, type Msg } from '../hooks/workflows'
 import { applyOps, checkOps, editRequest, listed, parseEdit, parseSaved, planText, projectKey, runText, slug, toSaved, uniqueName,
   EDIT_CALL, EDIT_SYSTEM, type Op } from '../hooks/library'
 import { agentSpec, typeName } from '../hooks/agentfile'
@@ -264,7 +264,7 @@ describe('the pane', () => {
 describe('the rack', () => {
   test('orders strips by who needs you next and pulls out the ones that do', async () => {
     const v = {
-      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null, mode: null,
+      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null,
       agents: [
         agent({ id: 'run', startedAt: 1 }),
         agent({ id: 'done', status: 'completed', endedAt: 5 }),
@@ -491,7 +491,7 @@ describe('messaging an agent', () => {
 })
 
 describe('what REDhelm chooses to show', () => {
-  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null, mode: null }
+  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, workflow: null, library: null }
 
   test("only this session's workflows, or ones an agent here is changing; finished runs stay quiet", async () => {
     const ws = (dir: string, extra: object) => ({ dir, name: dir.split('/').pop()!, ...extra })
@@ -892,6 +892,32 @@ describe('a reply abandoned by hand', () => {
     await clock.advance(200)
     expect(box).toBe('my draft')
     expect(await ui.find({ type: 'Text', text: /Writing to/ })).toBeUndefined()
+    await ui.unmount()
+  })
+  test("a background agent's finish notice is not yours: the reply stays open and the box keeps what you are writing", async ($: any, on: any) => {
+    let box = 'my draft'
+    const passed: string[] = []
+    on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+    on('prompt.fill', (_: any, e: any) => ((box = e.text), { isFilled: true }))
+    on('prompt.submit', (_: any, e: any) => (passed.push(e.text), { text: e.text }))
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Rewrite the setup guide', subagentType: 'general-purpose', name: 'docs' })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const sheet = await openSheet($, ui, 'a1')
+    await sheet.press({ key: 'compose-a1' })
+    await sheet.unmount()
+    box = '→ docs: half a reply'
+    const notice = '<task-notification> <task-id>a9</task-id> done </task-notification>'
+    await $.prompt.submit({ text: notice, origin: { kind: 'task-notification' } })
+    await clock.advance(200)
+    await new Promise<void>(r => setTimeout(() => r(), 40))
+    expect(passed).toEqual([notice]) // it still reaches Claude
+    expect(box).toBe('→ docs: half a reply')
+    expect(await ui.find({ type: 'Text', text: /Writing to Docs/ })).toBeDefined()
+    // The prompt you then type to Claude still ends the reply, and your draft comes back.
+    await $.prompt.submit({ text: 'a question for Claude instead' })
+    await clock.advance(200)
+    expect(box).toBe('my draft')
     await ui.unmount()
   })
 })
@@ -1472,6 +1498,14 @@ describe('reading a session', () => {
     expect(isPrompt(you('hi'))).toBe(true)
     expect(stretches([you('go'), lead(call('a1', { run_in_background: true })), notice('done'), lead(call('a2'))])).toHaveLength(1)
   })
+  test("a `!` command and its output are not your prompts", () => {
+    const bash = you('<bash-input>npm test</bash-input>')
+    const output = you('<bash-stdout>3 passed</bash-stdout><bash-stderr></bash-stderr>')
+    expect(isPrompt(bash)).toBe(false)
+    expect(isPrompt(output)).toBe(false)
+    // Run between two agents' starts, it splits no stretch.
+    expect(stretches([you('go'), lead(call('a1')), bash, output, lead(call('a2', { description: 'Add tests' }))])).toEqual([{ from: 0, to: 5, led: false }])
+  })
   test('lead skills come from the Skill tool and from / commands, once each, in order', () => {
     const msgs = [slash('redmanager'), lead(skill('brainstorming'), skill('redmanager')), lead(call('a1'))]
     expect(leadSkills(msgs, { from: 0, to: 3, led: true })).toEqual(['redmanager', 'brainstorming'])
@@ -1619,7 +1653,7 @@ describe('reading a session', () => {
   test("readWorkflow: each agent and role gets its own team; labels cut at a word; Earlier while there is one before", () => {
     const msgs = [you('one'), lead(call('a1', { description: 'Review the whole store module' })), you('two'), lead(call('a2', { description: 'Add tests' }))]
     const list = stretches(msgs)
-    const read = (back: number) => readWorkflow({ msgs, records: {}, teams: { a1: [lead(call('b1', { subagent_type: 'Explore' }))] }, list, back, root: '/Users/x/notes-app/', lead: {} })!
+    const read = (back: number) => readWorkflow({ msgs, records: {}, teams: { a1: [lead(call('b1', { subagent_type: 'Explore' }))] }, list, back, root: '/Users/Shared/notes-app/', lead: {} })!
     expect([read(0).more, read(1).more]).toEqual([true, false])
     expect(read(0).stages.map(st => st.agents.map(a => a.label))).toEqual([['Add tests']])
     const d = read(1)
@@ -1627,7 +1661,24 @@ describe('reading a session', () => {
     expect(d.stages[0]!.agents[0]!.team?.map(r => [r.type, r.ran])).toEqual([['Explore', 1]])
     expect(d.stages[1]!.agents[0]!.team).toBeUndefined()
     expect(d.roles.map(r => r.team?.map(t => t.type))).toEqual([['Explore']])
-    expect(d).toMatchObject({ project: 'notes-app', projectKey: hash('/Users/x/notes-app/'), types: [], notCopied: [], evidence: [], folded: [] })
+    expect(d).toMatchObject({ project: 'notes-app', projectKey: hash('/Users/Shared/notes-app/'), types: [], notCopied: [], evidence: [], folded: [] })
+  })
+  test("an agent's own conversation says what it used, as REDhelm's records count it: every call, MCP by server, skills once each in order", () => {
+    const own = [you('Write docs/api.md'), lead({ tool: 'Read', input: { file_path: 'a' } }, { tool: 'Read', input: { file_path: 'b' } }), result(),
+      lead({ tool: 'mcp__notes__search', input: { q: 'x' } }, { tool: 'Skill', input: { skill: 'tdd' } }),
+      lead({ tool: 'Skill', input: { skill: 'tdd' } }, { tool: 'Skill', input: { skill: 'brainstorming' } }, { tool: 'toString', input: {} })]
+    expect(usedIn(own)).toEqual({ tools: { Read: 2, 'mcp:notes': 1, Skill: 3, toString: 1 }, skills: ['tdd', 'brainstorming'] })
+    expect(usedIn([])).toEqual({ tools: {}, skills: [] })
+  })
+  test("readWorkflow takes an agent's tools and skills from its record, and from its own conversation where the record holds no tools", () => {
+    const msgs = [you('go'), lead(call('a1'), call('a2', { description: 'Add tests' }), call('a3', { description: 'Review' }))]
+    const records = { a1: agent({ id: 'a1', tools: { Edit: 3 }, skills: ['tdd'] }), a2: agent({ id: 'a2' }) }
+    // a1's record wins; a2's holds no tools; a3 has none at all (REDhelm let it go).
+    const used = { a1: { tools: { Read: 9 }, skills: [] }, a2: { tools: { Bash: 2 }, skills: ['debugging'] }, a3: { tools: { Read: 2, 'mcp:notes': 1 }, skills: ['tdd'] } }
+    const d = readWorkflow({ msgs, records, teams: {}, used, list: [{ from: 0, to: 2, led: false }], back: 0, root: '/p', lead: {} })!
+    expect(d.stages[0]!.agents.map(a => [a.tools, a.skills])).toEqual([[{ Edit: 3 }, ['tdd']], [{ Bash: 2 }, ['debugging']], [{ Read: 2, 'mcp:notes': 1 }, ['tdd']]])
+    expect(d.roles).toHaveLength(1)
+    expect(d.roles[0]).toMatchObject({ ran: 3, tools: { Edit: 3, Bash: 2, Read: 2, 'mcp:notes': 1 }, skills: ['tdd', 'debugging'] })
   })
 })
 
@@ -2292,6 +2343,25 @@ describe('the library', () => {
     expect(agentSpec(fm('tools: "Read"  # just that'))).toMatchObject({ spec: { tools: ['Read'] } }) // a comment after the quote is no text
   })
 
+  test('a YAML anchor, alias or tag is never read as a name: the type may not use what its own file denies', () => {
+    const fm = (...lines: string[]) => `---\nname: a\ndescription: b\n${lines.join('\n')}\n---\nBody`
+    const cases: [string, string][] = [
+      [fm('disallowedTools: &deny Bash'), "disallowedTools isn't a list"],
+      [fm('x-deny: &d [Bash]', 'disallowedTools: *d'), "disallowedTools isn't a list"],
+      [fm('tools: !!str Read'), "tools isn't a list"],
+      [fm('disallowedTools:', '  - &b Bash'), "disallowedTools isn't a list"],
+      [fm('disallowedTools: [Edit, *b]'), "disallowedTools isn't a list"],
+      [fm('tools: Read, !!str Bash'), "tools isn't a list"],
+      [fm('model: *m'), "model isn't text"],
+      [fm('model: !!str opus'), "model isn't text"],
+      ['---\nname: &n a\ndescription: b\n---\n', "name isn't text"],
+    ]
+    for (const [file, error] of cases) expect([file, agentSpec(file)]).toEqual([file, { error }])
+    expect(typeName('---\nname: &n a\ndescription: b\n---\n')).toBeUndefined()
+    // Quoted, or inside a value, the marks are only text.
+    expect(agentSpec(fm('model: "*m"', 'disallowedTools: ["&deny"]', 'initialPrompt: Use Bash & Read!'))).toMatchObject({ spec: { model: '*m', disallowedTools: ['&deny'], initialPrompt: 'Use Bash & Read!' } })
+  })
+
   test('CRLF reads as LF, in an agent file and in a brief', () => {
     const file = '---\nname: store-reviewer\ndescription: Reviews the store\ntools: Read, Grep\nhooks:\n  Stop: echo\ninitialPrompt: |\n  One\n  Two\n---\nYou review.\n\nCarefully.'
     const crlf = file.replace(/\n/g, '\r\n')
@@ -2317,19 +2387,23 @@ const answered = (text: string) => ({ value: { isAnswered: true, text, usage: { 
  * The session, the model, the home folder and the files a Save and a Load read. `asked`, `write` and `own` serve the tests after
  * Task 8's five: the requests the model got, how a write answers, agents' own conversations. `answer` gets the request, and its
  * undefined means the reading. `links`: files `fs.list` reports as symbolic links. `list`: how a listing answers instead.
+ * An agent's own conversation given as 'deny' is one the engine will not read.
  */
-const setup = (on: any, opts: { said?: Msg[]; answer?: (e: any) => any; files?: Record<string, string>; asked?: any[]; write?: () => any; own?: Record<string, Msg[]>;
+const setup = (on: any, opts: { said?: Msg[]; answer?: (e: any) => any; files?: Record<string, string>; asked?: any[]; write?: (e: any) => any; own?: Record<string, Msg[] | 'deny'>;
   links?: string[]; list?: (path: string) => any } = {}) => {
   const writes: Record<string, string> = {}
   const files = () => opts.files ?? {}
   on('env.get', () => ({ value: HOME }))
-  on('session.messages', (_$: any, e: any) => ({ value: e.agentId ? opts.own?.[e.agentId] ?? [] : opts.said ?? said }))
+  on('session.messages', (_$: any, e: any) => {
+    const own = e.agentId ? opts.own?.[e.agentId] ?? [] : opts.said ?? said
+    return own === 'deny' ? { deny: 'no transcript' } : { value: own }
+  })
   on('model.complete', (_$: any, e: any) => (opts.asked?.push(e), opts.answer?.(e) ?? answered(reading)))
   on('fs.list', (_$: any, e: any) => opts.list?.(e.path) ?? ({ value: Object.keys(files()).filter(f => f.startsWith(`${e.path}/`))
     .map(f => (opts.links?.includes(f) ? { name: f.slice(e.path.length + 1), kind: 'other', isLink: true } : { name: f.slice(e.path.length + 1), kind: 'file' })) }))
   on('fs.read', (_$: any, e: any) => (e.path in files() ? { value: files()[e.path] } : { error: 'missing' }))
   on('fs.exists', (_$: any, e: any) => ({ value: Object.keys(files()).some(f => f === e.path || f.startsWith(`${e.path}/`)) }))
-  on('fs.write', (_$: any, e: any) => opts.write?.() ?? ((writes[e.path] = e.text), { value: undefined }))
+  on('fs.write', (_$: any, e: any) => opts.write?.(e) ?? ((writes[e.path] = e.text), { value: undefined }))
   return writes
 }
 const settle = () => new Promise<void>(r => setTimeout(() => r(), 60))
@@ -2479,6 +2553,35 @@ describe('saving a workflow', () => {
     expect(await ui.find({ type: 'Text', text: /^Review the change ran 2 times · saved once$/ })).toBeDefined()
     await ui.press({ key: 'wf-item-1' })
     expect(await ui.find({ type: 'Text', text: /^Team: Explore · haiku · ran 1×$/ })).toBeDefined()
+    await ui.unmount()
+  })
+  test("an agent REDhelm holds no tools of saves what its own conversation shows, and its team; one whose conversation can't be read saves none", async ($: any, on: any) => {
+    const writes = setup(on, {
+      said: [you('Write the docs, add tests, review'), lead(call('a1'), call('a7', { description: 'Add tests' }), call('a8', { description: 'Check it' }))],
+      own: {
+        // a1: recorded at its spawn, but REDhelm saw none of its calls.
+        a1: [you('Write docs/api.md'), lead({ tool: 'Edit', input: { file_path: 'docs/api.md' } })],
+        // a7: no record at all (it ran before REDhelm, or its record was let go).
+        a7: [you('Add tests'), lead({ tool: 'Read', input: { file_path: 'a' } }, { tool: 'Read', input: { file_path: 'b' } }), result(),
+          lead({ tool: 'mcp__notes__search', input: { q: 'x' } }, { tool: 'Skill', input: { skill: 'tdd' } }), result(),
+          lead(call('b1', { description: 'Scout', subagent_type: 'Explore', model: 'haiku' }))],
+        a8: 'deny',
+      },
+      answer: () => ({ value: { isAnswered: false } }),
+    })
+    await engine(on, true)($)
+    await $.agent.spawn({ prompt: 'x', description: 'Write the docs', subagentType: 'general-purpose' }) // a1
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-save' }); await settle(); await ui.press({ key: 'wf-keep' }); await settle()
+    const saved = JSON.parse(Object.values(writes)[0]!)
+    const agents = saved.stages.flatMap((s: any) => s.agents)
+    expect(agents.map((a: any) => [a.description, a.tools, a.skills])).toEqual([
+      ['Write the docs', { Edit: 1 }, []],
+      ['Add tests', { Read: 2, 'mcp:notes': 1, Skill: 1, Agent: 1 }, ['tdd']],
+      ['Check it', {}, []],
+    ])
+    expect(agents[1].team).toMatchObject([{ type: 'Explore', model: 'haiku', ran: 1 }])
+    expect(planText(saved, {}, {})).toContain('  Tools it used: Read 2, mcp:notes 1, Skill 1, Agent 1. Skills it used: tdd.\n')
     await ui.unmount()
   })
 
@@ -2678,6 +2781,23 @@ describe('editing and running a workflow', () => {
     expect(await ui.find({ type: 'Text', text: /could not be read/ })).toBeUndefined()
     await ui.press({ key: 'wf-load' }); await settle() // Load again puts the list away
     expect(await ui.find({ type: 'Text', text: /^No saved workflows yet$/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a Save while the library is listed lists it again, with what was saved; one while it is put away leaves it away', async ($: any, on: any) => {
+    const files: Record<string, string> = {}
+    setup(on, { files, write: e => ((files[e.path] = e.text), { value: undefined }) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-load' }); await settle()
+    expect(await ui.find({ type: 'Text', text: /^No saved workflows yet$/ })).toBeDefined()
+    await ui.press({ key: 'wf-save' }); await settle(); await ui.press({ key: 'wf-keep' }); await settle()
+    expect(await ui.find({ key: 'wf-open-tests-then-a-review' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^No saved workflows yet$/ })).toBeUndefined()
+    await ui.press({ key: 'wf-load' }); await settle() // put away
+    await ui.press({ key: 'wf-save' }); await settle(); await ui.press({ key: 'wf-keep' }); await settle()
+    expect(Object.keys(files)).toEqual([lib('tests-then-a-review'), lib('tests-then-a-review-2')])
+    expect(await ui.find({ key: 'wf-open-tests-then-a-review' })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -3038,8 +3158,11 @@ describe('editing and running a workflow', () => {
     expect(asked.filter(a => a.system === EDIT_SYSTEM)).toHaveLength(1)
     expect(await ui.find({ key: 'wf-item-2' })).toBeUndefined()
     expect(await ui.find({ key: 'wf-item-1' })).toBeDefined()
-    // No edit out, but the sheet open: typed by hand, it is still not Claude's.
-    expect((await $.prompt.submit({ text: '✎ Workflow: drop the docs' })).drop).toBe('✎ Workflow: applying')
+    // No edit out, but the sheet open: typed by hand, it is still not Claude's, and nothing applies it.
+    expect((await $.prompt.submit({ text: '✎ Workflow: drop the docs' })).drop).toBe('REDhelm: press Edit first')
+    await settle()
+    expect(asked.filter(a => a.system === EDIT_SYSTEM)).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: /^Applying…$/ })).toBeUndefined()
     expect(box.passed).toEqual([])
     await ui.press({ key: 'wf-cancel' }); await settle()
     await $.prompt.submit({ text: '✎ Workflow: drop the docs' }) // no sheet: your own text

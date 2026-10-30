@@ -1,6 +1,6 @@
 import type { Elements } from 'claude-code'
 
-import type { Agent, Detail, Draft, Guard, Message, Note, Release, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState, Workspace } from '../types'
+import type { Agent, Detail, Draft, Guard, Message, Note, Release, SavedWorkflow, SetupItem, WorkflowSheet as SheetState, Workspace } from '../types'
 import { agentSpec, LEFT_BEHIND } from './agentfile'
 import { itemCount, projectKey } from './library'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
@@ -109,8 +109,6 @@ export type View = {
   workflow: SheetState | null
   /** The library as Load read it, while it is listed. */
   library: { workflows: SavedWorkflow[]; unreadable: number } | null
-  /** An edit or run of a workflow holding the prompt box. */
-  mode: WorkflowMode
 }
 
 // Tokens: surfaces follow the theme; meaning colours are the theme's own keys
