@@ -37,3 +37,5 @@ REDhelm reads your project folder and Claude Code's session data on your machine
 ## More
 
 Screenshots, a demo, every setting and troubleshooting: [github.com/watLr/redhelm](https://github.com/watLr/redhelm). MIT licensed.
+
+Found a bug or have an idea? Press **Feedback** at the foot of the sidebar, run `/redhelm feedback`, or [open an issue](https://github.com/watLr/redhelm/issues/new/choose). For a security problem, [report it privately](https://github.com/watLr/redhelm/security/advisories/new).

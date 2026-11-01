@@ -37,6 +37,8 @@ export type Actions = {
   skipSetup: () => void
   /** Installs the newer REDhelm through Claude Code's plugin update. */
   update: () => void
+  /** Prints where to report a problem into the conversation. */
+  feedback: () => void
   /** Save: reads the session's latest stretch of agent work into the workflow sheet. */
   wfSave: () => void
   /** Widens the sheet's stretch by the one before it. */
@@ -1070,6 +1072,12 @@ function Update({ els, v, act }: { els: Els; v: View; act: Actions }) {
   )
 }
 
+/** Where to report a problem: prints the links, full width in the conversation, so any terminal can open them. */
+function Feedback({ els, act }: { els: Els; act: Actions }) {
+  const { Button } = els
+  return <Button key="feedback" plain dimColor label="Feedback" hover={{ bold: true, scope: 'feedback' }} onPress={act.feedback} />
+}
+
 /** On the classic screen the terminal keeps the mouse, so no button here can be pressed. */
 function NoClicks({ els }: { els: Els }) {
   const { Text } = els
@@ -1109,6 +1117,7 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       <Boards els={els} v={v} />
       {plate(<WorkflowsSection els={els} v={v} act={act} columns={columns} />)}
       {v.release && plate(<Update els={els} v={v} act={act} />)}
+      {plate(<Feedback els={els} act={act} />)}
     </Box>
   )
 }

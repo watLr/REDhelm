@@ -1,5 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
+  - name: Report a security problem
+    url: https://github.com/watLr/redhelm/security/advisories/new
+    about: "Please don't post these publicly: this goes only to the maintainer."
   - name: Troubleshooting
     url: https://github.com/watLr/redhelm#troubleshooting
     about: "Buttons that don't respond, a sidebar that opens above the prompt, theme and motion: the common fixes are here."

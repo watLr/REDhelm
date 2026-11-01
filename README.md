@@ -159,6 +159,7 @@ If your terminal is light but Claude Code's theme is dark, Claude Code draws dar
 | `/redhelm setup` | Review the Claude Code settings REDhelm recommends |
 | `/redhelm models` | Which models answered this session, recent switches, and what REDhelm's own model calls used (labels, and Save and Edit for workflows) |
 | `/redhelm update` | Install a newer REDhelm, if there is one (then `/reload-plugins`) |
+| `/redhelm feedback` | Links for reporting a bug, an idea, a security problem or anything else on GitHub |
 
 You can also write to an agent directly: `→ name: your message`.
 
@@ -211,6 +212,14 @@ REDhelm follows Claude Code's theme, not the terminal's. Run `/theme` and pick l
 
 `/config` → **Background** → none brings back the plain pane; **Motion** → off holds every trace and background still.
 </details>
+
+## Feedback
+
+Something broken, an idea, or anything else: press **Feedback** at the foot of the sidebar, run `/redhelm feedback`, or [open an issue](https://github.com/watLr/redhelm/issues/new/choose). You need a GitHub account. REDhelm's own links fill in your REDhelm and Claude Code versions on a bug report, and you see the whole report before you submit it. REDhelm sends nothing itself.
+
+Issues are public, so leave out anything private: your name, paths from your home folder, project names, prompts, usage limits.
+
+A security problem? [Report it privately](https://github.com/watLr/redhelm/security/advisories/new), as [SECURITY.md](SECURITY.md) explains.
 
 ## Privacy and cost
 

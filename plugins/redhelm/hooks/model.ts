@@ -407,6 +407,27 @@ export function looksLikeQuestion(text: string) {
     /\b(should I|shall I|do you want|would you like|want me to|let me know|your (call|decision|approval|go-ahead|input|choice)|waiting (for|on) (you|your)|need (you|your)|please (confirm|approve|decide|choose|advise|review))\b/i.test(plain)
 }
 
+const REPO = 'https://github.com/watLr/redhelm'
+
+/**
+ * GitHub's form chooser, which hands the query on to the form picked. Its short names are the bug form's
+ * field ids (.github/check-forms.rb holds them together). A version that could not be read is left out.
+ */
+export function feedbackLink(redhelm?: string, claude?: string) {
+  const query = Object.entries({ rh: redhelm, cc: claude }).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v!)}`).join('&')
+  return `${REPO}/issues/new/choose${query && `?${query}`}`
+}
+
+/** What /redhelm feedback says. Each link has its own line, so it fits an 80-column terminal unbroken. */
+export function feedbackText(link: string) {
+  return [
+    'Report a bug, an idea or anything else on GitHub. Issues are public, so leave out anything private.',
+    link,
+    'A security problem? Report it privately:',
+    `${REPO}/security/advisories/new`,
+  ].join('\n')
+}
+
 /** Whether version `a` is newer than `b`, number by number ("0.10.0" beats "0.9.9"); one unreadable never is. */
 export function isNewer(a: string, b: string) {
   const parse = (v: string) => (/^\d+(\.\d+)*$/.test(v.trim()) ? v.trim().split('.').map(Number) : null)

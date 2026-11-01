@@ -2,6 +2,10 @@ name: Feature request
 description: An idea that would make REDhelm more useful
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Issues are public: leave out your name, paths from your home folder, project names, prompts and usage limits.
   - type: textarea
     id: need
     attributes:
@@ -25,6 +29,7 @@ body:
         - The sidebar
         - The bar above the prompt
         - An agent's sheet
+        - Workflows
         - The status line
         - A command or setting
         - Not sure

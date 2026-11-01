@@ -1,0 +1,16 @@
+name: Feedback or question
+description: Anything else about REDhelm, good or bad
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for writing. Issues are public: leave out your name, paths from your home folder, project names, prompts and usage limits.
+
+        A security problem? [Report it privately](https://github.com/watLr/redhelm/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What's on your mind
+      description: What you liked, what confused you, or what you'd like to ask. A screenshot is welcome; crop out anything private.
+    validations:
+      required: true

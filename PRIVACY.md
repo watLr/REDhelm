@@ -1,6 +1,6 @@
 # REDhelm privacy policy
 
-Effective: 2026-10-30
+Effective: 2026-11-01
 
 REDhelm is a plugin for Claude Code. It runs on your computer, inside Claude Code. It has no server of its own, no account and no analytics. This policy says what REDhelm reads, what it keeps, what leaves your machine, and how to turn each part off.
 
@@ -12,6 +12,7 @@ Everything REDhelm reads, it reads on your machine.
 - **Claude Code's session data.** This session's conversation, each agent's own conversation, the agents Claude Code lists, and which models answered. When you press **Run** on a workflow whose lead used skills, also this session's slash commands, to see which of those skills it has.
 - **Claude Code's settings.** Your model and theme, the `/config` rows its setup card offers, and `~/.claude/settings.json` for its status lines.
 - **Your installed plugins.** It runs `claude plugin list` to see which REDhelm is installed and where it came from, for the update check.
+- **Version numbers.** REDhelm's own version and Claude Code's, when you press **Feedback** or run `/redhelm feedback`, to fill in the feedback link.
 - **Your computer.** Whether your desktop is light or dark (for Claude Code's `auto` theme), and whether `python3` runs (for its status lines).
 - **Your saved workflows**, in `~/.claude/redhelm/workflows/`, when you press **Save** (to give a new one a name no other has), **Load** or **Run**.
 
@@ -42,6 +43,7 @@ REDhelm writes no file into your project.
   - **Workflow edits** (Sonnet, at low effort): one request for each change you send with **Edit**. It carries the draft, with its briefs and shared brief parts whole (up to 6,000 characters each), and what you asked for.
 
   `/redhelm models` shows how many requests the headlines and the workflow calls made this session.
+- **Feedback links, only if you open one.** The sidebar's **Feedback** and `/redhelm feedback` only print links in your conversation, not to Claude, and send nothing themselves. Opening the feedback link gives GitHub your REDhelm and Claude Code versions. Nothing is posted until you submit a form.
 - **Nothing else.** Desktop notifications after long turns are shown by your own system.
 
 ## What it never does
@@ -68,6 +70,6 @@ REDhelm leaves headless runs alone (`claude -p`, the SDK and other non-interacti
 
 ## Contact
 
-Questions about this policy or about REDhelm and your data: open an issue at [github.com/watLr/redhelm/issues](https://github.com/watLr/redhelm/issues). Issues are public, so leave out anything private.
+Questions about this policy or about REDhelm and your data: run `/redhelm feedback` or open an issue at [github.com/watLr/redhelm/issues](https://github.com/watLr/redhelm/issues). Issues are public, so leave out anything private.
 
 A change to this policy comes with a new Effective date above.

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, HookStream, Register, SessionMessage, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 import type { Agent, Draft, Guard, Note, Placement, Release, SavedType, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState } from '../types'
-import { DEFAULTS, LINES, activity, appearance, capital, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
+import { DEFAULTS, LINES, activity, appearance, capital, feedbackLink, feedbackText, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
@@ -315,6 +315,18 @@ async function checkRelease($: $) {
   await update($, release, was =>
     was?.state === 'updated' || was?.state === 'updating' ? was
       : isNewer(latest, installed) ? { id, installed, latest } : null)
+}
+
+/**
+ * Prints where to report a problem, for the person only: a command's text goes to the model on the next turn, a logged
+ * line doesn't. A logged line flattens its line breaks, so each gets its own, and a link never runs into the words before
+ * it. A version that can't be read is left for the person to fill in.
+ */
+async function printFeedback($: $) {
+  const root = $.plugin.root.replace(/[\\/]\.claude-plugin$/, '')
+  const mine = await $.fs.read(`${root}/.claude-plugin/plugin.json`).then(t => String((JSON.parse(t) as { version?: unknown }).version ?? '')).catch(() => '')
+  const claude = await $.session.version().then(v => v.version).catch(() => '')
+  feedbackText(feedbackLink(mine, claude)).split('\n').forEach(line => $.ui.log(line))
 }
 
 /** Runs Claude Code's own plugin update; the new version loads on /reload-plugins or a restart. */
@@ -1348,6 +1360,7 @@ function actions($: $, inPane = false): Actions {
     applySetup: () => void quietly(() => applySetup($)),
     skipSetup: () => void quietly(() => skipSetup($)),
     update: () => void quietly(async () => $.ui.toast(await updateNow($))),
+    feedback: () => void quietly(() => printFeedback($)),
     wfSave: () => void quietly(() => startSave($, 0)),
     wfEarlier: () => void quietly(async () => {
       const s = await read($, workflowSheet)
@@ -1496,7 +1509,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'redhelm',
       description: 'Your agents, their work and what needs you',
-      argumentHint: 'right | bottom | setup | models | update',
+      argumentHint: 'right | bottom | setup | models | update | feedback',
     })
     timers.forEach(t => t.cancel())
     timers = [
@@ -1527,13 +1540,17 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'redhelm' }, async ($, e) => {
-    autoOpened = true
     const arg = e.args.trim().toLowerCase()
     if (arg === 'models') return { text: await modelsReport($) }
+    if (arg === 'feedback') {
+      await quietly(() => printFeedback($))
+      return {}
+    }
     if (arg === 'update') {
       if (!(await read($, release))) await quietly(() => checkRelease($))
       return { text: await updateNow($) }
     }
+    autoOpened = true // the person has taken charge of the panel; the commands above only print
     if (arg === 'setup') {
       const items = await setupItems($, true)
       await update($, setup, () => items)

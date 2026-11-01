@@ -4,6 +4,8 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome.
 
 - **Found a bug?** [Open a bug report](https://github.com/watLr/redhelm/issues/new?template=bug_report.yml).
 - **Have an idea?** [Suggest a feature](https://github.com/watLr/redhelm/issues/new?template=feature_request.yml).
+- **Anything else?** [Send feedback or a question](https://github.com/watLr/redhelm/issues/new?template=feedback.yml).
+- **A security problem?** [Report it privately](https://github.com/watLr/redhelm/security/advisories/new), never in an issue. See [SECURITY.md](SECURITY.md).
 - **Want to change code?** For anything bigger than a small fix, open an issue first so we can agree on the shape before you build it.
 
 Issues are public. Leave out anything private: your name, file paths from your home folder, project names, prompts, usage limits.
