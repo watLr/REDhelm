@@ -36,15 +36,17 @@ export const settings = (o: Record<string, unknown> = {}): Settings => ({
 })
 
 /**
- * The desktop's light or dark appearance. macOS stores a key only when dark (absent, `defaults`
- * exits 1: light); GNOME says 'prefer-dark', 'prefer-light' or 'default'. Unknown: dark.
+ * The desktop's light or dark appearance. macOS stores a key only when dark (absent, `defaults read -g
+ * AppleInterfaceStyle` exits 1: light); GNOME (`gsettings get org.gnome.desktop.interface color-scheme`) says
+ * 'prefer-dark', 'prefer-light' or 'default', and is asked only when macOS's answer is no answer. Unknown: dark.
  */
-export async function appearance(ask: (argv: string[]) => Promise<{ exitCode: number; stdout: string } | undefined>): Promise<'light' | 'dark'> {
-  const mac = await ask(['defaults', 'read', '-g', 'AppleInterfaceStyle'])
-  if (mac?.exitCode === 0) return /dark/i.test(mac.stdout) ? 'dark' : 'light'
-  if (mac?.exitCode === 1) return 'light'
-  const gnome = await ask(['gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme'])
-  if (gnome?.exitCode === 0) return /dark/i.test(gnome.stdout) ? 'dark' : 'light'
+type Ran = { exitCode: number; stdout: string } | undefined
+export async function appearance(mac: () => Promise<Ran>, gnome: () => Promise<Ran>): Promise<'light' | 'dark'> {
+  const m = await mac()
+  if (m?.exitCode === 0) return /dark/i.test(m.stdout) ? 'dark' : 'light'
+  if (m?.exitCode === 1) return 'light'
+  const g = await gnome()
+  if (g?.exitCode === 0) return /dark/i.test(g.stdout) ? 'dark' : 'light'
   return 'dark'
 }
 

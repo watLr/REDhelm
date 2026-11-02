@@ -239,6 +239,53 @@ describe('what REDhelm brings to Claude Code', () => {
     await ui.unmount()
   })
 
+  test('Apply writes each of the four settings under its own name, and no other', async ($: any, on: any) => {
+    const written: Record<string, unknown> = {}
+    on('config.list', () => ({ value: ROWS.map(r => ({ ...r, value: r.kind === 'boolean' ? false : r.value, isLocked: false })) }))
+    on('config.set', (_: any, e: any) => ((written[e.key] = e.value), { value: e.value }))
+    await engine(on, true)($)
+    await settle()
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+    await ui.press({ key: 'setup-apply' })
+    await settle()
+    expect(written).toEqual({ switchModelsOnFlag: 'Ask each time', turnDuration: true, timestamps: true, inputNeededNotifEnabled: true })
+    expect(Object.keys(written).sort()).toEqual(DEFAULTS.map(d => d.key).sort())
+    await ui.unmount()
+  })
+
+  for (const key of ['redhelm.placement', 'redhelm@inline.placement']) {
+    test(`/redhelm bottom and right save REDhelm's own placement (${key}) and nothing else`, async ($: any, on: any) => {
+      const written: [string, unknown][] = []
+      const row = (k: string) => ({ key: k, label: 'x', kind: 'choice', value: 'right', options: ['right', 'bottom'], isLocked: false })
+      on('config.list', () => ({ value: [row('other.placement'), row(key)] }))
+      on('config.set', (_: any, e: any) => (written.push([e.key, e.value]), { value: e.value }))
+      await engine(on, true)($)
+      await $.command.run({ command: 'redhelm', args: 'bottom', origin: { kind: 'person' }, presentation: {} } as any)
+      await $.command.run({ command: 'redhelm', args: 'right', origin: { kind: 'person' }, presentation: {} } as any)
+      expect(written).toEqual([[key, 'bottom'], [key, 'right']])
+    })
+  }
+
+  /** A second plugin that sees the tool calls REDhelm itself makes, and answers WatcherSeen with them. */
+  const WATCHER = {
+    name: 'watcher',
+    register(on: any) {
+      const seen: unknown[] = []
+      on('tool.call', async (_$: any, e: any, next: any) => (e.tool === 'WatcherSeen' ? { result: seen } : (seen.push([e.tool, e.task_id]), next(e))))
+    },
+  }
+
+  test("Stop on a working agent stops that agent's task with TaskStop", { plugins: [WATCHER] } as any, async ($: any, on: any) => {
+    on('agent.list', () => ({ value: [{ id: 'a1', name: 'docs', description: 'Rewrite the setup guide', type: 'general-purpose', status: 'running' }] }))
+    await engine(on, true)($)
+    await spawn($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'stop-a1' })
+    await settle()
+    expect((await $.tool.call({ tool: 'WatcherSeen' })).result).toEqual([['TaskStop', 'a1']])
+    await ui.unmount()
+  })
+
   test('a model switch REDhelm did not see you choose holds prompts and tools until /model', async ($: any, on: any) => {
     on('config.list', () => ({ value: [] }))
     on('settings.read', () => ({ value: {} }))
@@ -1250,12 +1297,13 @@ describe('the backdrop', () => {
   })
 
   test("Claude Code's auto theme follows the desktop: macOS's dark key, GNOME's colour scheme, else dark", async () => {
-    const answers = (map: Record<string, { exitCode: number; stdout: string } | undefined>) => async (argv: string[]) => map[argv[0]!]
-    expect(await appearance(answers({ defaults: { exitCode: 0, stdout: 'Dark\n' } }))).toBe('dark')
-    expect(await appearance(answers({ defaults: { exitCode: 1, stdout: '' } }))).toBe('light') // macOS, no dark key
-    expect(await appearance(answers({ gsettings: { exitCode: 0, stdout: "'prefer-light'" } }))).toBe('light')
-    expect(await appearance(answers({ gsettings: { exitCode: 0, stdout: "'prefer-dark'" } }))).toBe('dark')
-    expect(await appearance(answers({}))).toBe('dark')
+    type Ran = { exitCode: number; stdout: string } | undefined
+    const answers = (map: { defaults?: Ran; gsettings?: Ran }) => [async () => map.defaults, async () => map.gsettings] as const
+    expect(await appearance(...answers({ defaults: { exitCode: 0, stdout: 'Dark\n' } }))).toBe('dark')
+    expect(await appearance(...answers({ defaults: { exitCode: 1, stdout: '' } }))).toBe('light') // macOS, no dark key
+    expect(await appearance(...answers({ gsettings: { exitCode: 0, stdout: "'prefer-light'" } }))).toBe('light')
+    expect(await appearance(...answers({ gsettings: { exitCode: 0, stdout: "'prefer-dark'" } }))).toBe('dark')
+    expect(await appearance(...answers({}))).toBe('dark')
   })
 
   test('the light theme draws on near-white, which Claude Code paints (it leaves a Box of pure #ffffff unpainted)', () => {

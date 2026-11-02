@@ -1506,6 +1506,30 @@ describe('editing and running a workflow', () => {
     await ui.unmount()
   })
 
+  test('Run registers every setting a copied type carries, and never its permission mode, hooks or MCP servers', async ($: any, on: any) => {
+    const FULL = ['---', 'name: store-builder', 'description: Builds the store', 'tools: Read, Edit', 'disallowedTools: [WebFetch]', 'skills: tdd',
+      'model: opus', 'effort: high', 'maxTurns: 30', 'initialPrompt: Read the plan first.', 'memory: project', 'background: true', 'isolation: worktree',
+      'permissionMode: bypassPermissions', 'hooks:', '  Stop: echo', 'mcpServers: [notes]', '---', 'You build the store.'].join('\n')
+    const registered: any[] = []
+    on('agent.register', (_$: any, e: any) => (registered.push(e), { value: { agent: `redhelm:${e.name}` } }))
+    const box = promptBox(on)
+    setup(on, { said: FRESH, files: library(savedOne({ id: 'build', name: 'Build', types: [{ name: 'store-builder', definition: FULL }],
+      stages: [{ agents: [{ ...savedAgent, label: 'Build', type: 'store-builder', brief: 'Build the store' }] }] })) })
+    await engine(on, true)($)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'wf-load' }); await settle()
+    await ui.press({ key: 'wf-run-build' }); await settle()
+    await $.prompt.submit({ text: `${box.text}go` })
+    const read = agentSpec(FULL)
+    if ('error' in read) throw new Error(read.error)
+    expect(Object.keys(read.spec)).toHaveLength(13) // name, description, prompt and all ten settings it carries
+    expect(registered).toHaveLength(1)
+    expect(Object.fromEntries(Object.entries(registered[0]).filter(([, v]) => v !== undefined))).toEqual(read.spec)
+    for (const key of ['permissionMode', 'hooks', 'mcpServers']) expect(key in registered[0]).toBe(false)
+    expect(box.passed.at(-1).text).toContain('subagent_type redhelm:store-builder (its hooks, MCP servers and permission mode stayed behind)')
+    await ui.unmount()
+  })
+
   test('no prompt box', { plugins: [PEEK] }, async ($: any, on: any) => {
     const toasts = toastsOf(on)
     promptBox(on, '', { unreachable: true })

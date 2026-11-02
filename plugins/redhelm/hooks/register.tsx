@@ -279,10 +279,10 @@ async function received($: $, from: string, raw: string) {
 
 // A newer REDhelm
 
-/** Where the published REDhelm says its version. */
-const MANIFEST = 'https://raw.githubusercontent.com/watLr/redhelm/main/plugins/redhelm/.claude-plugin/plugin.json'
-/** REDhelm's own marketplace, the one that publishes MANIFEST: `redhelm@redhelm`. */
+/** REDhelm's own marketplace, the one that publishes the version checked below: `redhelm@redhelm`. */
 const MARKET = 'redhelm'
+/** The one copy the update check and Update serve: REDhelm from its own marketplace. */
+const OWN = 'redhelm@redhelm'
 const fromMarket = (id: string) => id.split('@')[1] ?? ''
 const CHECK_EVERY = 6 * 3_600_000
 const CHECK_SHARED_MS = 3_600_000
@@ -303,7 +303,8 @@ async function checkRelease($: $) {
     if (!mine) return update($, release, () => null)
     let latest = ''
     if (fromMarket(mine.id) === MARKET) {
-      const got = await $.http.fetch(MANIFEST)
+      // The published REDhelm's version, written out at the call so the plugin directory can read the one address.
+      const got = await $.http.fetch('https://raw.githubusercontent.com/watLr/redhelm/main/plugins/redhelm/.claude-plugin/plugin.json')
       if (!got.ok) return
       latest = String((JSON.parse(got.text) as { version?: unknown }).version ?? '')
     }
@@ -341,10 +342,11 @@ async function updateNow($: $): Promise<string> {
   }
   if (rel.state === 'updating') return `REDhelm is already updating to ${rel.latest}`
   if (rel.state === 'updated') return `REDhelm ${rel.latest} is installed · run /reload-plugins to load it`
+  // Only REDhelm's own copy is ever offered an update (checkRelease); the commands are written out in full.
+  if (rel.id !== OWN) return `REDhelm comes from ${fromMarket(rel.id)}, which keeps it up to date · claude plugin update ${rel.id}`
   await update($, release, (r): Release | null => r && { ...r, state: 'updating', detail: undefined })
-  const market = rel.id.split('@')[1]!
-  await $.process.run(['claude', 'plugin', 'marketplace', 'update', market], { timeoutMs: 120_000 }).catch(() => undefined)
-  const r = await $.process.run(['claude', 'plugin', 'update', rel.id], { timeoutMs: 120_000 })
+  await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'redhelm'], { timeoutMs: 120_000 }).catch(() => undefined)
+  const r = await $.process.run(['claude', 'plugin', 'update', 'redhelm@redhelm'], { timeoutMs: 120_000 })
     .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
   const ok = r.exitCode === 0
   if (ok) await $.store.delete('release').catch(() => undefined) // the next check reads the new version
@@ -375,8 +377,11 @@ let staleTold: string | undefined
 let shownStatus: string | undefined | null = null
 /** Whether python3 runs here (the shipped status lines need it); undefined until asked. */
 let hasPython: boolean | undefined
-/** The command that worked for desktop notifications here; null when none does. */
-let notifier: string[] | null | undefined
+/** The programs that show a desktop notification, tried in this order: macOS's, then Linux's. */
+const NOTIFIERS = ['osascript', 'notify-send'] as const
+type Notifier = (typeof NOTIFIERS)[number]
+/** The program that worked for desktop notifications here; null when none does. */
+let notifier: Notifier | null | undefined
 
 const statusText = (g: Guard) => {
   const model = [short(g.model), g.effort].filter(Boolean).join(' · ')
@@ -414,8 +419,11 @@ let system: { at: number; theme: 'light' | 'dark' } | undefined
 async function systemTheme($: $): Promise<'light' | 'dark'> {
   const at = await $.clock.now()
   if (system && at - system.at < 60_000) return system.theme
-  const ask = async (argv: string[]) => $.process.run(argv, { timeoutMs: 3000 }).catch(() => undefined)
-  system = { at, theme: await appearance(ask) }
+  // Each command written out at its call, so the plugin directory can read what REDhelm runs.
+  system = { at, theme: await appearance(
+    () => $.process.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'], { timeoutMs: 3000 }).catch(() => undefined),
+    () => $.process.run(['gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme'], { timeoutMs: 3000 }).catch(() => undefined),
+  ) }
   return system.theme
 }
 
@@ -435,16 +443,14 @@ async function refresh($: $) {
 async function notify($: $, title: string, subtitle: string, body: string) {
   if (notifier === null) return
   const q = (s: string) => `"${s.replace(/[\\"]/g, m => `\\${m}`)}"`
-  const tries = notifier
-    ? [notifier]
-    : [['osascript', '-e'], ['notify-send']]
-  for (const cmd of tries) {
-    const argv = cmd[0] === 'osascript'
-      ? [...cmd, `display notification ${q(body)} with title ${q(title)} subtitle ${q(subtitle)} sound name "Glass"`]
-      : [...cmd, title, `${subtitle}\n${body}`]
+  // Each program written out at its call, so the plugin directory can read what REDhelm runs; only the words vary.
+  const show = (via: Notifier) => via === 'osascript'
+    ? $.process.run(['osascript', '-e', `display notification ${q(body)} with title ${q(title)} subtitle ${q(subtitle)} sound name "Glass"`])
+    : $.process.run(['notify-send', title, `${subtitle}\n${body}`])
+  for (const via of notifier ? [notifier] : NOTIFIERS) {
     try {
-      if ((await $.process.run(argv)).exitCode === 0) {
-        notifier = cmd
+      if ((await show(via)).exitCode === 0) {
+        notifier = via
         return
       }
     } catch {}
@@ -547,12 +553,27 @@ async function writeLines($: $, lines: SetupItem[]) {
   await $.fs.write(path, `${JSON.stringify(json, null, 2)}\n`)
 }
 
+/**
+ * One of the card's settings, each written out with its key, so the plugin directory can read every setting REDhelm
+ * changes: these four (DEFAULTS), never the permission mode. Any other key changes nothing.
+ */
+async function setSetting($: $, item: SetupItem) {
+  const value = item.value
+  switch (item.key) {
+    case 'switchModelsOnFlag': return $.config.set({ key: 'switchModelsOnFlag', value })
+    case 'turnDuration': return $.config.set({ key: 'turnDuration', value })
+    case 'timestamps': return $.config.set({ key: 'timestamps', value })
+    case 'inputNeededNotifEnabled': return $.config.set({ key: 'inputNeededNotifEnabled', value })
+    default: return { deny: `not a setting REDhelm offers: ${item.key}` }
+  }
+}
+
 async function applySetup($: $) {
   const items = (await $.state.get(SETUP)).value ?? []
   let applied = 0
   for (const item of items.filter(i => !LINE_KEYS.has(i.key))) {
     try {
-      const r = await $.config.set({ key: item.key, value: item.value } as Parameters<$['config']['set']>[0])
+      const r = await setSetting($, item)
       if (!r.deny) applied++
     } catch {}
   }
@@ -1182,7 +1203,14 @@ async function registerTypes($: $, w: SavedWorkflow) {
       const r = agentSpec(t.definition)
       try {
         if ('error' in r) throw new Error(r.error)
-        const { agent } = await $.agent.register({ ...r.spec })
+        const s = r.spec
+        // Field by field, so the plugin directory can read that a copied type gets no permission mode and no hooks: those
+        // stay behind (agentSpec), and the type runs in the session's own mode.
+        const { agent } = await $.agent.register({
+          name: s.name, description: s.description, prompt: s.prompt, tools: s.tools, disallowedTools: s.disallowedTools,
+          model: s.model, effort: s.effort, maxTurns: s.maxTurns, skills: s.skills, initialPrompt: s.initialPrompt,
+          memory: s.memory, background: s.background, isolation: s.isolation,
+        })
         registered.push([t.name, agent])
         leftBehind.push([t.name, r.leftBehind])
       } catch (err) {
@@ -1352,8 +1380,10 @@ function actions($: $, inPane = false): Actions {
     stop: id =>
       void (async () => {
         const name = await nameOf($, id)
-        // Typed narrowly: the full tool.call union is deeper than tsc will instantiate here.
-        await ($.tool.call as unknown as (input: { tool: 'TaskStop'; task_id: string }) => Promise<unknown>)({ tool: 'TaskStop', task_id: id })
+        // A plain call, so the plugin directory can read which tool REDhelm calls. tsc cannot resolve the full tool.call
+        // union here (TS2589); the call itself is checked by the engine against TaskStop's schema.
+        // @ts-expect-error TS2589
+        await $.tool.call({ tool: 'TaskStop', task_id: id })
         await note($, { kind: 'fail', text: `${name} stopped by you`, agentId: id })
       })(),
     toggleDone: () => void update($, showDone, x => !x),
@@ -1559,10 +1589,12 @@ export const register: Register = (on, options) => {
       return { text: `REDhelm setup: ${items.length} ${items.length === 1 ? 'setting' : 'settings'} to review` }
     }
     if (arg === 'right' || arg === 'bottom') {
-      // Saved as the person's REDhelm setting, the same row /config shows.
+      // Saved as the person's REDhelm setting, the same row /config shows: an installed REDhelm's, or one run from a
+      // folder (@inline). Each key is written out, so the plugin directory can read that only this setting changes.
       await quietly(async () => {
-        const row = (await $.config.list()).find(r => /^redhelm(@inline)?\.placement$/.test(r.key))
-        if (row) await $.config.set({ key: row.key, value: arg } as Parameters<$['config']['set']>[0])
+        const keys = new Set((await $.config.list()).map(r => r.key))
+        if (keys.has('redhelm.placement')) await $.config.set({ key: 'redhelm.placement', value: arg })
+        else if (keys.has('redhelm@inline.placement')) await $.config.set({ key: 'redhelm@inline.placement', value: arg })
       })
       await update($, placement, () => arg)
       await update($, collapsed, () => false)
