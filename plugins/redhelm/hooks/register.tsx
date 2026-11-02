@@ -14,7 +14,7 @@ import { EDIT_CALL, applyOps, checkOps, editable, editRequest, itemCount, listed
   toSaved, uniqueName, type Op } from './library'
 import { agentSpec, typeName } from './agentfile'
 
-type $ = EngineInterface
+type Engine = EngineInterface
 
 const PANE = 'redhelm'
 /** The agent sheet: a second pane, opened as a dialog over one agent. */
@@ -73,7 +73,7 @@ const blank = (id: string, at: number): Agent => ({
 })
 
 /** Change one agent, creating it if its first event beat the spawn hook. */
-async function patch($: $, id: string, fn: (a: Agent) => Partial<Agent>) {
+async function patch($: Engine, id: string, fn: (a: Agent) => Partial<Agent>) {
   const at = await $.clock.now()
   await update($, agents, all => {
     const a = all[id] ?? blank(id, at)
@@ -86,12 +86,12 @@ async function patch($: $, id: string, fn: (a: Agent) => Partial<Agent>) {
  * lists. The engine's own forks (compaction, memory, suggestions) carry ids no list names; without
  * this they turned up as an unnamed agent that never did anything.
  */
-async function ourAgent($: $, id: string) {
+async function ourAgent($: Engine, id: string) {
   if ((await $.state.get(AGENTS)).value?.[id]) return true
   return (await $.agent.list()).some(a => a.id === id)
 }
 
-async function note($: $, n: Omit<Note, 'at'>) {
+async function note($: Engine, n: Omit<Note, 'at'>) {
   const at = await $.clock.now()
   await update($, notes, list => [...list, { ...n, at }].slice(-40))
 }
@@ -99,7 +99,7 @@ async function note($: $, n: Omit<Note, 'at'>) {
 /** What an agent is called in REDhelm's messages and in the "→ name:" address. */
 const labelOf = (a?: Agent) => a?.name || excerpt(a?.description, 24) || a?.type || 'agent'
 
-const nameOf = async ($: $, id: string) => labelOf((await $.state.get(AGENTS)).value?.[id])
+const nameOf = async ($: Engine, id: string) => labelOf((await $.state.get(AGENTS)).value?.[id])
 
 /** A prompt addressed to an agent: "→ handle: message". */
 const ADDRESS = /^→ ([^:\n]+): ([\s\S]*)$/
@@ -124,7 +124,7 @@ const BACKGROUND = new Set(['task-notification', 'scheduled-trigger', 'peer', 'p
   'observer', 'observer-activity', 'auto-continuation', 'slack-ping', 'bridge', 'plugin'])
 
 /** The agent an address names, preferring one still running. */
-async function agentNamed($: $, name: string) {
+async function agentNamed($: Engine, name: string) {
   const all = Object.values((await $.state.get(AGENTS)).value ?? {})
   const hs = handles(all)
   const wanted = name.trim().toLowerCase()
@@ -135,7 +135,7 @@ async function agentNamed($: $, name: string) {
 }
 
 /** The sources' window on the host: the session root and $.fs. */
-async function io($: $): Promise<Io> {
+async function io($: Engine): Promise<Io> {
   return {
     root: await $.session.root(),
     read: path => $.fs.read(path),
@@ -149,7 +149,7 @@ async function io($: $): Promise<Io> {
 const told = new Set<string>()
 
 /** "✓ docs finished": a note and, when wanted, a pop-up. */
-async function announce($: $, id: string, failed: boolean, said = '') {
+async function announce($: Engine, id: string, failed: boolean, said = '') {
   if (told.has(id)) return
   told.add(id)
   const name = await nameOf($, id)
@@ -161,7 +161,7 @@ async function announce($: $, id: string, failed: boolean, said = '') {
 const readBack = new Set<string>()
 
 /** Fills in an agent REDhelm did not watch from the start, from what Claude Code kept of its conversation. */
-async function backfill($: $, id: string) {
+async function backfill($: Engine, id: string) {
   if (readBack.has(id)) return
   readBack.add(id)
   const said = await $.session.messages({ agentId: id })
@@ -184,7 +184,7 @@ const tidy = (text = '') => tidyPaths(text, root, homeDir)
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /** Merges the engine's agent list; writes only on change, and ticks the clock only while agents are live. */
-async function sync($: $) {
+async function sync($: Engine) {
   const at = await $.clock.now()
   const list = await $.agent.list()
   const merge = (all: Record<string, Agent>) => {
@@ -243,7 +243,7 @@ const ASKS = ['asks the person a question or for a decision', 'reports or inform
  * Whether a message waits on an answer: the session's small model reads it; its words alone decide when it
  * cannot, and always with Labels plain, which asks the model nothing.
  */
-async function isQuestion($: $, text: string) {
+async function isQuestion($: Engine, text: string) {
   if (cfg.labels === 'plain') return looksLikeQuestion(text)
   const label = await $.model.classify(text, ASKS).catch(() => undefined)
   return label ? label === ASKS[0] : looksLikeQuestion(text)
@@ -253,7 +253,7 @@ async function isQuestion($: $, text: string) {
 const answeredAt = new Map<string, number>()
 
 /** A question asks for you; a report becomes what the agent last said. */
-async function received($: $, from: string, raw: string) {
+async function received($: Engine, from: string, raw: string) {
   const at = await $.clock.now()
   const text = tidy(raw)
   const name = await nameOf($, from)
@@ -292,7 +292,7 @@ const CHECK_SHARED_MS = 3_600_000
  * is offered it: a local folder is its own source, and another marketplace (the plugin directory)
  * ships the version it chose and updates it itself.
  */
-async function checkRelease($: $) {
+async function checkRelease($: Engine) {
   // One check serves every open session for an hour: they share REDhelm's store.
   const at = await $.clock.now()
   const kept = (await $.store.get('release')) as { at: number; id: string; installed: string; latest: string } | undefined
@@ -323,15 +323,16 @@ async function checkRelease($: $) {
  * line doesn't. A logged line flattens its line breaks, so each gets its own, and a link never runs into the words before
  * it. A version that can't be read is left for the person to fill in.
  */
-async function printFeedback($: $) {
-  const root = $.plugin.root.replace(/[\\/]\.claude-plugin$/, '')
+async function printFeedback($: Engine) {
+  const dir = $.plugin.root
+  const root = dir.replace(/[\\/]\.claude-plugin$/, '')
   const mine = await $.fs.read(`${root}/.claude-plugin/plugin.json`).then(t => String((JSON.parse(t) as { version?: unknown }).version ?? '')).catch(() => '')
   const claude = await $.session.version().then(v => v.version).catch(() => '')
   feedbackText(feedbackLink(mine, claude)).split('\n').forEach(line => $.ui.log(line))
 }
 
 /** Runs Claude Code's own plugin update; the new version loads on /reload-plugins or a restart. */
-async function updateNow($: $): Promise<string> {
+async function updateNow($: Engine): Promise<string> {
   const rel = await read($, release)
   if (!rel) {
     const kept = (await $.store.get('release')) as { id?: string } | undefined
@@ -391,7 +392,7 @@ const statusText = (g: Guard) => {
 }
 
 /** Pins the guard's line under the prompt; only redraws when the line changes. */
-async function status($: $) {
+async function status($: Engine) {
   const g = (await $.state.get(GUARD)).value ?? {}
   const problem = !!(g.fallback || g.stale)
   const text = cfg.statusLine === 'off' || (cfg.statusLine === 'problems' && !problem) ? undefined : statusText(g)
@@ -401,7 +402,7 @@ async function status($: $) {
 }
 
 /** Is this session behind the default new sessions get? A picker alias resolves to the newest version seen. */
-async function checkStale($: $) {
+async function checkStale($: Engine) {
   const g = (await $.state.get(GUARD)).value ?? {}
   const model = g.model ?? (await $.session.model())
   if (!model.startsWith('claude-')) return status($)
@@ -416,7 +417,7 @@ async function checkStale($: $) {
 
 /** The system's appearance, read at most once a minute, for Claude Code's `auto` theme (whose own reading plugins cannot see). */
 let system: { at: number; theme: 'light' | 'dark' } | undefined
-async function systemTheme($: $): Promise<'light' | 'dark'> {
+async function systemTheme($: Engine): Promise<'light' | 'dark'> {
   const at = await $.clock.now()
   if (system && at - system.at < 60_000) return system.theme
   // Each command written out at its call, so the plugin directory can read what REDhelm runs.
@@ -428,7 +429,7 @@ async function systemTheme($: $): Promise<'light' | 'dark'> {
 }
 
 /** Re-reads workspaces and the stale check; writes only on change, so idle polling never redraws. */
-async function refresh($: $) {
+async function refresh($: Engine) {
   const t = (await $.settings.read()).theme
   const was = theme
   theme = typeof t === 'string' && t.includes('light') ? 'light' : t === 'auto' ? await systemTheme($) : 'dark'
@@ -440,7 +441,7 @@ async function refresh($: $) {
 }
 
 /** A desktop notification where the platform has one (macOS, Linux), else nothing beyond the toast. */
-async function notify($: $, title: string, subtitle: string, body: string) {
+async function notify($: Engine, title: string, subtitle: string, body: string) {
   if (notifier === null) return
   const q = (s: string) => `"${s.replace(/[\\"]/g, m => `\\${m}`)}"`
   // Each program written out at its call, so the plugin directory can read what REDhelm runs; only the words vary.
@@ -462,13 +463,13 @@ async function notify($: $, title: string, subtitle: string, body: string) {
 
 const LINE_KEYS = new Set<string>(LINES.map(l => l.key))
 
-const home = async ($: $) => (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
+const home = async ($: Engine) => (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
 
 /**
  * Where REDhelm's status line scripts run from once applied: copies beside their state, not the
  * plugin's own folder, whose path names its version and goes away after an update.
  */
-const linesDir = async ($: $) => `${await home($)}/.claude/redhelm/statusline`
+const linesDir = async ($: Engine) => `${await home($)}/.claude/redhelm/statusline`
 const SCRIPTS = ['statusline.py', 'agents.py', 'common.py']
 
 /** The command for one of REDhelm's status lines. */
@@ -478,8 +479,9 @@ const lineCommand = (dir: string, script: string) => `python3 "${dir}/${script}"
 const STRANDED = /^python3 "[^"]*[\\/]plugins[\\/]cache[\\/][^"]*[\\/]statusline[\\/](statusline|agents)\.py"$/
 
 /** Makes the kept copies of the status line scripts this version's; writes only what changed. */
-async function shipLines($: $) {
-  const from = `${$.plugin.root.replace(/[\\/]\.claude-plugin$/, '')}/statusline`
+async function shipLines($: Engine) {
+  const dir = $.plugin.root
+  const from = `${dir.replace(/[\\/]\.claude-plugin$/, '')}/statusline`
   const to = await linesDir($)
   for (const name of SCRIPTS) {
     const text = await $.fs.read(`${from}/${name}`)
@@ -492,7 +494,7 @@ async function shipLines($: $) {
  * Keeps REDhelm's status lines working across updates: refreshes the copies they run, and moves a
  * line an earlier REDhelm set up inside the versioned plugin folder to them. Lines of your own stay.
  */
-async function keepLines($: $) {
+async function keepLines($: Engine) {
   const path = `${await home($)}/.claude/settings.json`
   if (!(await $.fs.exists(path))) return
   const json = JSON.parse((await $.fs.read(path)) || '{}') as Record<string, { command?: unknown } | undefined>
@@ -505,7 +507,7 @@ async function keepLines($: $) {
   await writeLines($, stranded.map(l => ({ key: l.key, label: l.label, value: lineCommand(dir, l.script) })))
 }
 
-async function pythonRuns($: $) {
+async function pythonRuns($: Engine) {
   if (hasPython === undefined) {
     try {
       hasPython = (await $.process.run(['python3', '--version'])).exitCode === 0
@@ -517,13 +519,13 @@ async function pythonRuns($: $) {
 }
 
 /** Settings already applied or set aside; the card offers each one once, and /redhelm setup offers them all again. */
-async function setupHandled($: $) {
+async function setupHandled($: Engine) {
   const keys = (await $.store.get('setupSeen')) as string[] | undefined
   if (keys) return keys
   return (await $.store.get('setup')) ? DEFAULTS.map(d => d.key) : [] // before v0.3: one flag for all
 }
 
-async function setupItems($: $, all = false): Promise<SetupItem[]> {
+async function setupItems($: Engine, all = false): Promise<SetupItem[]> {
   const skip = all ? [] : await setupHandled($)
   const rows = await $.config.list()
   const items: SetupItem[] = DEFAULTS.flatMap(d => {
@@ -544,7 +546,7 @@ async function setupItems($: $, all = false): Promise<SetupItem[]> {
 }
 
 /** Writes REDhelm's status lines into the person's settings.json, keeping everything else in it. */
-async function writeLines($: $, lines: SetupItem[]) {
+async function writeLines($: Engine, lines: SetupItem[]) {
   if (!lines.length) return
   const path = `${await home($)}/.claude/settings.json`
   const text = (await $.fs.exists(path)) ? await $.fs.read(path) : '{}'
@@ -557,18 +559,17 @@ async function writeLines($: $, lines: SetupItem[]) {
  * One of the card's settings, each written out with its key, so the plugin directory can read every setting REDhelm
  * changes: these four (DEFAULTS), never the permission mode. Any other key changes nothing.
  */
-async function setSetting($: $, item: SetupItem) {
-  const value = item.value
+async function setSetting($: Engine, item: SetupItem) {
   switch (item.key) {
-    case 'switchModelsOnFlag': return $.config.set({ key: 'switchModelsOnFlag', value })
-    case 'turnDuration': return $.config.set({ key: 'turnDuration', value })
-    case 'timestamps': return $.config.set({ key: 'timestamps', value })
-    case 'inputNeededNotifEnabled': return $.config.set({ key: 'inputNeededNotifEnabled', value })
+    case 'switchModelsOnFlag': return $.config.set({ key: 'switchModelsOnFlag', value: item.value })
+    case 'turnDuration': return $.config.set({ key: 'turnDuration', value: item.value })
+    case 'timestamps': return $.config.set({ key: 'timestamps', value: item.value })
+    case 'inputNeededNotifEnabled': return $.config.set({ key: 'inputNeededNotifEnabled', value: item.value })
     default: return { deny: `not a setting REDhelm offers: ${item.key}` }
   }
 }
 
-async function applySetup($: $) {
+async function applySetup($: Engine) {
   const items = (await $.state.get(SETUP)).value ?? []
   let applied = 0
   for (const item of items.filter(i => !LINE_KEYS.has(i.key))) {
@@ -588,14 +589,14 @@ async function applySetup($: $) {
   $.ui.toast(applied === items.length ? `REDhelm settings applied` : `Applied ${applied} of ${items.length} settings`)
 }
 
-async function skipSetup($: $) {
+async function skipSetup($: Engine) {
   const items = (await $.state.get(SETUP)).value ?? []
   await $.store.set('setupSeen', [...new Set([...(await setupHandled($)), ...items.map(i => i.key)])])
   await update($, setup, () => [])
 }
 
 /** /redhelm models: what actually answered this session, the latest model switches, and what REDhelm's own model calls used. */
-async function modelsReport($: $) {
+async function modelsReport($: Engine) {
   const use = (await $.state.get(USAGE)).value ?? {}
   const switches = ((await $.store.get('switches')) ?? []) as { at: number; from: string; to: string; source: string }[]
   const at = await $.clock.now()
@@ -618,7 +619,7 @@ async function modelsReport($: $) {
 }
 
 /** Leaves a reply unsent: an addressed prompt goes back to what you were writing to Claude (or empty). */
-async function leaveReply($: $) {
+async function leaveReply($: Engine) {
   const draft = (await takeDraft($)) ?? ''
   await update($, composing, () => null)
   // Only an addressed prompt is REDhelm's to replace; anything else you have typed since is yours.
@@ -626,7 +627,7 @@ async function leaveReply($: $) {
 }
 
 /** The draft kept while you write to an agent, handed back once and forgotten. */
-async function takeDraft($: $) {
+async function takeDraft($: Engine) {
   const draft = (await $.state.get(DRAFT)).value ?? null
   if (draft !== null) await update($, draftKept, () => null)
   return draft
@@ -636,7 +637,7 @@ async function takeDraft($: $) {
  * Your draft back in the prompt box, once Claude Code has let go of the prompt it just took or dropped
  * (it keeps a dropped prompt's text, so filling at once would lose to it).
  */
-function fillBack($: $, draft: string) {
+function fillBack($: Engine, draft: string) {
   $.clock.after(100, () => void quietly(() => $.prompt.fill({ text: draft, mode: 'replace' })))
 }
 
@@ -655,13 +656,13 @@ const labels = labeler()
 /** Cancels label calls in flight when the session ends. */
 let stopLabels = new AbortController()
 
-async function onScreen($: $) {
+async function onScreen($: Engine) {
   if ((await $.ui.panes()).some(p => p.id === PANE && p.isShown)) return true
   return (await read($, placement)) === 'bottom' && !(await read($, collapsed))
 }
 
 /** One label from the small model, the way /btw asks a side question: low effort, a few words, six seconds at most. */
-const askHaiku = ($: $): Complete => async ({ system, prompt }) => {
+const askHaiku = ($: Engine): Complete => async ({ system, prompt }) => {
   const r = await $.model.complete({ model: 'haiku', effort: 'low', maxTokens: 30, timeoutMs: 6000, system, prompt }, { signal: stopLabels.signal })
   counted(r)
   return r.isAnswered ? r.text : undefined
@@ -678,7 +679,7 @@ const counted = (r: { usage?: { input_tokens?: number; output_tokens?: number } 
 }
 
 /** Titles for questions first (they are what you read), then headlines for agents at work; written only when they change. */
-async function labelAll($: $) {
+async function labelAll($: Engine) {
   const at = await $.clock.now()
   for (const m of await read($, inbox)) {
     if (m.title || !(m.ask ?? looksLikeQuestion(m.text))) continue
@@ -701,7 +702,7 @@ async function labelAll($: $) {
 let shownFace = ''
 
 /** Once a second: whether REDhelm is on screen; if so, a time it shows that changed redraws it, and labels are asked for. */
-async function tick($: $) {
+async function tick($: Engine) {
   const was = visible
   visible = await onScreen($)
   await pace($)
@@ -717,7 +718,7 @@ async function tick($: $) {
 
 /** The frame loop runs only while REDhelm is on screen and a trace still moves (the sheet's spans a minute). */
 let frames: { cancel: () => void } | undefined
-async function pace($: $) {
+async function pace($: Engine) {
   const at = await $.clock.now()
   const moving = [...traces.values()].some(times => times.some(t => at - t < BUCKET_MS * BUCKETS + BUCKET_MS)) || backdropMoves(at)
   if (visible && moving && cfg.motion === 'on') frames ??= $.clock.every(125, () => void quietly(() => frame($)))
@@ -728,7 +729,7 @@ async function pace($: $) {
 }
 
 /** Eight times a second: every trace on screen whose cells changed is repainted in place, with no redraw. */
-async function frame($: $) {
+async function frame($: Engine) {
   if (!visible || cfg.motion !== 'on' || framing || (!sites.size && !backdropSite)) return
   framing = true
   try {
@@ -780,7 +781,7 @@ const backdropMoves = (at: number) =>
 let stillCells: { key: string; cells: string } | undefined
 
 /** One frame of the backdrop. Rings start where their agent sits on the activity line under REDhelm's name. */
-async function backdropCells($: $, at: number, columns: number, rows: number) {
+async function backdropCells($: Engine, at: number, columns: number, rows: number) {
   if (!backdropMoves(at) && cfg.backdrop !== 'field' && cfg.backdrop !== 'ember' || cfg.motion !== 'on') {
     const key = `${cfg.backdrop}|${cfg.motion}|${theme}|${columns}x${rows}`
     if (stillCells?.key !== key) stillCells = { key, cells: await drawBackdrop($, at, columns, rows) }
@@ -789,7 +790,7 @@ async function backdropCells($: $, at: number, columns: number, rows: number) {
   return drawBackdrop($, at, columns, rows)
 }
 
-async function drawBackdrop($: $, at: number, columns: number, rows: number) {
+async function drawBackdrop($: Engine, at: number, columns: number, rows: number) {
   const all = Object.values(await read($, agents))
   const live = new Set(all.filter(a => LIVE.has(a.status)).map(a => a.id))
   const parts = spectrum(Object.fromEntries([...traces].filter(([id]) => live.has(id))), at, columns)
@@ -837,7 +838,7 @@ function scriptsIn(msgs: readonly Msg[], s: Stretch) {
 }
 
 /** The project's agent files by the type name each gives, subfolders too (as Claude Code finds them); the first file to give a name has it. A file that cannot be read is passed over. */
-async function projectTypes($: $, dir: string) {
+async function projectTypes($: Engine, dir: string) {
   const found = new Map<string, string>()
   const folders: [path: string, depth: number][] = [[dir, 0]]
   let files = 0
@@ -865,7 +866,7 @@ async function projectTypes($: $, dir: string) {
  * REDhelm holds no record of (it ran before REDhelm, or its record was let go) is looked for too, and
  * copied only when its file is there.
  */
-async function copyTypes($: $, calls: readonly Call[], records: Record<string, Agent>, at: string): Promise<{ types: SavedType[]; notCopied: string[] }> {
+async function copyTypes($: Engine, calls: readonly Call[], records: Record<string, Agent>, at: string): Promise<{ types: SavedType[]; notCopied: string[] }> {
   const origins = new Map<string, string | undefined>()
   for (const c of calls) {
     const type = c.input.subagent_type || 'general-purpose'
@@ -892,7 +893,7 @@ type SaveRead = { draft?: Draft; trace: TraceEvent[]; script?: string }
  * lead's model and effort from the guard; and the project's types the agents ran as. A run's agent whose
  * record was let go is not among them: only its record names it.
  */
-async function readForSave($: $, back: number): Promise<SaveRead> {
+async function readForSave($: Engine, back: number): Promise<SaveRead> {
   const msgs = asMsgs(await $.session.messages())
   const records = await read($, agents)
   const list = stretches(msgs)
@@ -926,7 +927,7 @@ async function readForSave($: $, back: number): Promise<SaveRead> {
  * Save (`back` 0) and Earlier: the sheet at once with what was seen, then the reading, which never holds it up.
  * With Workflow reading off nothing is asked: what was seen is the whole draft. An edit of the draft it replaces ends.
  */
-async function startSave($: $, back: number) {
+async function startSave($: Engine, back: number) {
   await leaveEdit($)
   const token = ++sheetToken
   let got: SaveRead
@@ -950,7 +951,7 @@ async function startSave($: $, back: number) {
  * while the sheet still holds the draft it was asked of, unread; a call that fails or times out leaves
  * the fallbacks and says so.
  */
-async function readLead($: $, token: number, asked: Draft, trace: readonly TraceEvent[], script?: string) {
+async function readLead($: Engine, token: number, asked: Draft, trace: readonly TraceEvent[], script?: string) {
   let reading: Reading | undefined
   try {
     const r = await $.model.complete({ ...READING_CALL, ...readingRequest(asked, trace, script) }, { signal: stopLabels.signal })
@@ -971,7 +972,7 @@ const failure = (err: unknown) => excerpt(tidy(err instanceof Error ? err.messag
  * The library's folder and its `.json` files, each with its text, undefined when it could not be read.
  * A folder not made yet holds none; one that is there but cannot be listed is an error, never taken for empty.
  */
-async function libraryFiles($: $) {
+async function libraryFiles($: Engine) {
   const h = await home($)
   if (!h) throw new Error('no home folder to keep it in')
   const dir = `${h}/${LIBRARY}`
@@ -985,7 +986,7 @@ async function libraryFiles($: $) {
 }
 
 /** The draft written to the library: under a name no saved workflow has ("<name> 2"), as a file no file in the folder has, so nothing is overwritten. */
-async function writeWorkflow($: $, d: Draft) {
+async function writeWorkflow($: Engine, d: Draft) {
   const { dir, files } = await libraryFiles($)
   const names = files.map(f => f.name)
   const name = uniqueName(d.name.trim() || 'Workflow', listed(files.map(f => ({ name: f.name, text: f.text ?? '' })), d.projectKey).workflows.map(w => w.name))
@@ -1003,7 +1004,7 @@ async function writeWorkflow($: $, d: Draft) {
  * why and leaves the sheet open. A form with no items is never saved (the sheet offers no Save for either).
  * A library list on show is read again, so it holds what was just saved.
  */
-async function keepWorkflow($: $) {
+async function keepWorkflow($: Engine) {
   const s = await read($, workflowSheet)
   if (keeping || s?.mode !== 'review' || !s.draft || s.busy || !itemCount(s.draft)) return
   keeping = true
@@ -1027,7 +1028,7 @@ async function keepWorkflow($: $) {
  * Cancel, Back, Esc, the panel closing: the sheet goes, a reading or an edit still out is dropped, and an
  * edit of its draft ends with your draft back in the box. A run waiting in the box is the box's, and stays.
  */
-async function closeWorkflow($: $) {
+async function closeWorkflow($: Engine) {
   sheetToken++
   await update($, workflowSheet, () => null)
   await leaveEdit($)
@@ -1039,7 +1040,7 @@ async function closeWorkflow($: $) {
  * Ends a workflow's mode, as leaveReply ends a reply: what you were writing to Claude comes back, when the
  * box still holds the mark (anything else typed there since is yours). `ends`: which modes this ends.
  */
-async function leaveMode($: $, ends: (m: NonNullable<WorkflowMode>) => boolean) {
+async function leaveMode($: Engine, ends: (m: NonNullable<WorkflowMode>) => boolean) {
   const mode = await read($, workflowMode)
   if (!mode || !ends(mode)) return
   await update($, workflowMode, () => null)
@@ -1047,10 +1048,10 @@ async function leaveMode($: $, ends: (m: NonNullable<WorkflowMode>) => boolean) 
   if (marked(await $.prompt.read().then(p => p.text, () => ''), mode)) await $.prompt.fill({ text: draft, mode: 'replace' })
 }
 
-const leaveEdit = ($: $) => leaveMode($, m => m.kind === 'edit')
+const leaveEdit = ($: Engine) => leaveMode($, m => m.kind === 'edit')
 
 /** An open reply ends before Edit or Run takes the box: its draft goes back into the box, to be kept again. */
-async function endReply($: $) {
+async function endReply($: Engine) {
   if (await read($, composing)) await leaveReply($)
 }
 
@@ -1058,7 +1059,7 @@ async function endReply($: $) {
  * Edit or Run takes the prompt box: what it holds is kept as your draft (unless it is another mode's
  * mark, whose kept draft is handed on), and `text` goes in. False, with a toast, where there is no box.
  */
-async function takeBox($: $, text: string) {
+async function takeBox($: Engine, text: string) {
   const mode = await read($, workflowMode)
   const box = await $.prompt.read().then(p => p.text, () => '')
   const filled = await $.prompt.fill({ text, mode: 'replace' }).then(r => r.isFilled, () => false)
@@ -1074,7 +1075,7 @@ async function takeBox($: $, text: string) {
 let handingKeys = false
 
 /** The bottom bar's Workflows pane, opened as the person asks for it, and again when an edit made from it lands. */
-const openWorkflowPane = ($: $) => $.ui.open({ id: WORKFLOW_PANE, title: 'Workflows', focus: true, closeOnEscape: true, rows: 24 }).catch(() => {})
+const openWorkflowPane = ($: Engine) => $.ui.open({ id: WORKFLOW_PANE, title: 'Workflows', focus: true, closeOnEscape: true, rows: 24 }).catch(() => {})
 
 /**
  * Edit: `✎ Workflow: ` in the box. Not while the reading is out: it names the items as they were when it
@@ -1082,7 +1083,7 @@ const openWorkflowPane = ($: $) => $.ui.open({ id: WORKFLOW_PANE, title: 'Workfl
  * nothing). `pane`: pressed in the bottom bar's Workflows pane, which holds the keys, so REDhelm closes
  * it for them to reach the prompt (as Reply closes the agent sheet) and opens it again once the edit lands.
  */
-async function startEdit($: $, pane: boolean) {
+async function startEdit($: Engine, pane: boolean) {
   if (!editable(await read($, workflowSheet), cfg.workflowReading === 'sonnet')) return
   await endReply($)
   if (!(await takeBox($, EDITING))) return
@@ -1107,7 +1108,7 @@ let generation = 0
  * One ✎: the sheet is busy at once (nothing else on it changes until the edits are in), and the change is
  * asked after the edits before it. `pane`: asked from the bottom bar's Workflows pane, which opens again when it lands.
  */
-async function queueEdit($: $, token: number, ask: string, pane: boolean) {
+async function queueEdit($: Engine, token: number, ask: string, pane: boolean) {
   const gen = generation
   await update($, workflowSheet, s => (s?.mode === 'review' && s.token === token ? { ...s, busy: 'applying' as const, error: undefined } : s))
   edits++
@@ -1130,7 +1131,7 @@ const EDIT_FAILED = "Couldn't apply that edit"
  * nothing and leave nothing to undo. It lands only on the sheet it was asked of, in the session it was
  * asked in; whether it landed (applied, refused or failed) is the answer. None is made with Workflow reading off.
  */
-async function applyEdit($: $, gen: number, token: number, ask: string) {
+async function applyEdit($: Engine, gen: number, token: number, ask: string) {
   const s = await read($, workflowSheet)
   if (cfg.workflowReading === 'off' || gen !== generation || s?.mode !== 'review' || s.token !== token || !s.draft || s.draft.read === 'pending') return false
   let why: string | undefined
@@ -1158,7 +1159,7 @@ async function applyEdit($: $, gen: number, token: number, ask: string) {
 }
 
 /** Load: the library listed; pressed again, the list goes. */
-async function loadLibrary($: $) {
+async function loadLibrary($: Engine) {
   if (await read($, workflowList)) await update($, workflowList, () => null)
   else await listLibrary($)
 }
@@ -1168,7 +1169,7 @@ async function loadLibrary($: $) {
  * counts with those that do not parse; a blank (deleted) one does not. `again`: only a list still on show
  * is replaced, so one put away while the folder was read stays away.
  */
-async function listLibrary($: $, again = false) {
+async function listLibrary($: Engine, again = false) {
   try {
     const { files } = await libraryFiles($)
     const got = listed(files.flatMap(f => (f.text === undefined ? [] : [{ name: f.name, text: f.text }])), projectKey(root || (await $.session.root())))
@@ -1179,7 +1180,7 @@ async function listLibrary($: $, again = false) {
 }
 
 /** A saved workflow's sheet, from the library list. A review sheet it replaces goes, with its reading and any edit of it. */
-async function openWorkflow($: $, id: string) {
+async function openWorkflow($: Engine, id: string) {
   sheetToken++
   await leaveEdit($)
   await update($, workflowSheet, () => ({ mode: 'saved' as const, id }))
@@ -1191,7 +1192,7 @@ async function openWorkflow($: $, id: string) {
  * project's agent folder (subfolders too) or yours registers nothing, and the plan names it as it is. A
  * file that does not parse or a spec the engine refuses is toasted, and the plan runs it as general-purpose.
  */
-async function registerTypes($: $, w: SavedWorkflow) {
+async function registerTypes($: Engine, w: SavedWorkflow) {
   const registered: [string, string][] = []
   const leftBehind: [string, string[]][] = []
   if (w.types.length) {
@@ -1237,7 +1238,7 @@ async function orNone<T>(work: () => Promise<T>, none: T) {
  * you typed, a workflow from another project (as its sheet's `from` says), and the lead's skills this session has
  * no slash command for. Agent types are not checked: Run registers the copied ones, and the others can't be listed.
  */
-async function runQuestion($: $, w: SavedWorkflow) {
+async function runQuestion($: Engine, w: SavedWorkflow) {
   const busy = await orNone(async () => Object.values(await read($, agents)).filter(a => LIVE.has(a.status)).length, 0)
   const prompts = await orNone(async () => typedPrompts(asMsgs(await $.session.messages())), 0)
   const other = await orNone(async () => w.projectKey !== projectKey(root || (await $.session.root())) && !!w.project, false)
@@ -1256,7 +1257,7 @@ const sheetOf = (s: SheetState | null) => (s ? `${s.mode} ${s.mode === 'saved' ?
  * sheet steps aside for it. When this session already has other work, Run does nothing yet: the workflow's sheet
  * (opened from the list if need be) asks first. `ask` false is that question's Run here, which runs at once.
  */
-async function runWorkflow($: $, id: string, ask = true) {
+async function runWorkflow($: Engine, id: string, ask = true) {
   if (running) return
   running = true
   try {
@@ -1288,7 +1289,7 @@ async function runWorkflow($: $, id: string, ask = true) {
 }
 
 /** The workflow a run names: as Load listed it, or read again from its file once the list was put away. */
-async function savedFor($: $, id: string) {
+async function savedFor($: Engine, id: string) {
   const w = (await read($, workflowList))?.workflows.find(x => x.id === id)
   if (w) return w
   const h = await home($)
@@ -1300,7 +1301,7 @@ async function savedFor($: $, id: string) {
  * Delete on a saved workflow's sheet: the first press asks, the second empties its file (the engine has no
  * delete, and Load passes a blank file over). The list loses it, the sheet goes, and a run of it ends.
  */
-async function deleteWorkflow($: $, id: string) {
+async function deleteWorkflow($: Engine, id: string) {
   const s = await read($, workflowSheet)
   if (s?.mode !== 'saved' || s.id !== id) return
   if (!s.armed) {
@@ -1327,7 +1328,7 @@ async function deleteWorkflow($: $, id: string) {
  * `inPane`: pressed in REDhelm's own panel, where an agent's sheet is drawn in place with Back.
  * Elsewhere (the bar above the prompt) there is no panel to draw in, so the sheet opens as its own pane.
  */
-function actions($: $, inPane = false): Actions {
+function actions($: Engine, inPane = false): Actions {
   const open = () => void $.ui.open({ id: PANE, title: TITLE, focus: true }).catch(() => {})
   return {
     open,
@@ -1438,7 +1439,7 @@ const elements = (table: unknown, surface: string): Els => {
     : { ...els, Raster: undefined, Input: surface === 'mobile' ? undefined : els.Input }
 }
 
-async function view($: $, site?: string): Promise<View> {
+async function view($: Engine, site?: string): Promise<View> {
   // A site drawn again starts its list of Rasters afresh: the frame loop repaints only what this drawing holds.
   const mounted = new Map<string, TraceSpec>()
   if (site) sites.set(site, mounted)
@@ -1481,7 +1482,7 @@ async function view($: $, site?: string): Promise<View> {
  * start counts: its tokens do) to its stop, less any time the API spent running its own tools.
  * The clock is read without waiting on it, so nothing streams slower.
  */
-async function* timed($: $, agentId: string, stream: HookStream<TurnStepChunk, TurnStepResult>) {
+async function* timed($: Engine, agentId: string, stream: HookStream<TurnStepChunk, TurnStepResult>) {
   let first: Promise<number> | undefined
   let stop: Promise<number> | undefined
   for await (const chunk of stream) {
@@ -1501,7 +1502,7 @@ async function* timed($: $, agentId: string, stream: HookStream<TurnStepChunk, T
   return result
 }
 
-async function show($: $) {
+async function show($: Engine) {
   if (!cfg.autoOpen || autoOpened || (await $.state.get(PLACEMENT)).value === 'bottom') return
   autoOpened = true
   void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
