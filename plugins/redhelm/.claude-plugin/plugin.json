@@ -1,12 +1,14 @@
 {
   "name": "redhelm",
-  "version": "0.8.5",
+  "displayName": "REDhelm",
+  "version": "0.8.6",
   "description": "A live control panel for your Claude Code agents: activity traces, questions that wait for you, an agent sheet with Message and Stop, and a model guard.",
   "author": {
-    "name": "watLr",
+    "name": "REDStandard",
     "url": "https://github.com/watLr"
   },
   "homepage": "https://github.com/watLr/redhelm",
+  "documentationUrl": "https://github.com/watLr/redhelm#readme",
   "repository": "https://github.com/watLr/redhelm",
   "license": "MIT",
   "privacyPolicyUrl": "https://github.com/watLr/redhelm/blob/main/PRIVACY.md",

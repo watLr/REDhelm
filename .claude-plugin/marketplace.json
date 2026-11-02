@@ -2,7 +2,7 @@
   "name": "redhelm",
   "description": "REDhelm: a live control panel for your Claude Code agents.",
   "owner": {
-    "name": "watLr"
+    "name": "REDStandard"
   },
   "plugins": [
     {

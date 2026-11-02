@@ -74,6 +74,6 @@ Each of these only reads. REDhelm uses the answer on your machine and sends it n
 
 ## More
 
-Screenshots, a demo, every setting and troubleshooting: [github.com/watLr/redhelm](https://github.com/watLr/redhelm). MIT licensed.
+Screenshots, a demo, every setting and troubleshooting: [github.com/watLr/redhelm](https://github.com/watLr/redhelm). A REDStandard product, MIT licensed.
 
 Found a bug or have an idea? Press **Feedback** at the foot of the sidebar, run `/redhelm feedback`, or [open an issue](https://github.com/watLr/redhelm/issues/new/choose). For a security problem, [report it privately](https://github.com/watLr/redhelm/security/advisories/new).

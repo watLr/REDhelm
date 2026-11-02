@@ -246,4 +246,4 @@ Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBU
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). REDhelm is a REDStandard product.
