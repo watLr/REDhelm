@@ -31,7 +31,7 @@ body:
     attributes:
       label: REDhelm version
       description: "`claude plugin list` shows it, beside redhelm@…"
-      placeholder: "0.8.3"
+      placeholder: "0.8.4"
     validations:
       required: true
   - type: input

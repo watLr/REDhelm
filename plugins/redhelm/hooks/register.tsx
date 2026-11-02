@@ -188,10 +188,10 @@ async function sync($: Engine) {
   const at = await $.clock.now()
   const list = await $.agent.list()
   const merge = (all: Record<string, Agent>) => {
-    const next = { ...all }
+    const byId = { ...all }
     for (const info of list) {
-      const a = next[info.id] ?? blank(info.id, at)
-      next[info.id] = {
+      const a = byId[info.id] ?? blank(info.id, at)
+      byId[info.id] = {
         ...a,
         name: info.name ?? a.name,
         type: info.type,
@@ -204,14 +204,14 @@ async function sync($: Engine) {
     // gone from the list past a short grace, has finished (no ghosts "running" for hours).
     // A workflow run's agents are never listed: each ends on its own turn.complete instead.
     const listed = new Set(list.map(i => i.id))
-    for (const a of Object.values(next)) {
+    for (const a of Object.values(byId)) {
       if (LIVE.has(a.status) && !a.run && !listed.has(a.id) && at - a.startedAt > GRACE_MS) {
-        next[a.id] = { ...a, status: 'completed', endedAt: a.endedAt ?? at, activity: undefined }
+        byId[a.id] = { ...a, status: 'completed', endedAt: a.endedAt ?? at, activity: undefined }
       }
     }
-    const finished = Object.values(next).filter(a => ENDED.has(a.status)).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
-    for (const a of finished.slice(20)) delete next[a.id]
-    return next
+    const finished = Object.values(byId).filter(a => ENDED.has(a.status)).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
+    for (const a of finished.slice(20)) delete byId[a.id]
+    return byId
   }
   const current = (await $.state.get(AGENTS)).value ?? {}
   const merged = merge(current)
@@ -239,16 +239,6 @@ async function sync($: Engine) {
 /** The labels the model picks between; the first means the agent waits on you. */
 const ASKS = ['asks the person a question or for a decision', 'reports or informs, needs no answer'] as const
 
-/**
- * Whether a message waits on an answer: the session's small model reads it; its words alone decide when it
- * cannot, and always with Labels plain, which asks the model nothing.
- */
-async function isQuestion($: Engine, text: string) {
-  if (cfg.labels === 'plain') return looksLikeQuestion(text)
-  const label = await $.model.classify(text, ASKS).catch(() => undefined)
-  return label ? label === ASKS[0] : looksLikeQuestion(text)
-}
-
 /** When the main conversation last wrote to each agent, so a question it answered while REDhelm was still reading it is not shown. */
 const answeredAt = new Map<string, number>()
 
@@ -257,7 +247,10 @@ async function received($: Engine, from: string, raw: string) {
   const at = await $.clock.now()
   const text = tidy(raw)
   const name = await nameOf($, from)
-  if (await isQuestion($, text)) {
+  // Whether it waits on an answer: the session's small model reads it; its words alone decide when it
+  // cannot, and always with Labels plain, which asks the model nothing.
+  const label = cfg.labels === 'plain' ? undefined : await $.model.classify(text, ASKS).catch(() => undefined)
+  if (label ? label === ASKS[0] : looksLikeQuestion(text)) {
     const answered = answeredAt.get(from)
     if (answered !== undefined && answered >= at) return
     await update($, inbox, list => [...list, { id: `${from}-${at}`, agentId: from, text, at, ask: true }].slice(-20))
@@ -973,9 +966,9 @@ const failure = (err: unknown) => excerpt(tidy(err instanceof Error ? err.messag
  * A folder not made yet holds none; one that is there but cannot be listed is an error, never taken for empty.
  */
 async function libraryFiles($: Engine) {
-  const h = await home($)
-  if (!h) throw new Error('no home folder to keep it in')
-  const dir = `${h}/${LIBRARY}`
+  const userHome = await home($)
+  if (!userHome) throw new Error('no home folder to keep it in')
+  const dir = `${userHome}/${LIBRARY}`
   const entries = await $.fs.list(dir).catch(async (err: unknown) => {
     if (await $.fs.exists(dir).catch(() => true)) throw err
     return []
@@ -1196,9 +1189,9 @@ async function registerTypes($: Engine, w: SavedWorkflow) {
   const registered: [string, string][] = []
   const leftBehind: [string, string[]][] = []
   if (w.types.length) {
-    const h = await home($)
+    const userHome = await home($)
     const here = new Set([...(await projectTypes($, `${root || (await $.session.root())}/${AGENT_DIR}`)).keys(),
-      ...(h ? (await projectTypes($, `${h}/${AGENT_DIR}`)).keys() : [])])
+      ...(userHome ? (await projectTypes($, `${userHome}/${AGENT_DIR}`)).keys() : [])])
     for (const t of w.types) {
       if (here.has(t.name) || registered.some(([name]) => name === t.name)) continue
       const r = agentSpec(t.definition)
@@ -1292,8 +1285,8 @@ async function runWorkflow($: Engine, id: string, ask = true) {
 async function savedFor($: Engine, id: string) {
   const w = (await read($, workflowList))?.workflows.find(x => x.id === id)
   if (w) return w
-  const h = await home($)
-  const got = h ? parseSaved(await $.fs.read(`${h}/${LIBRARY}/${id}.json`).catch(() => '')) : undefined
+  const userHome = await home($)
+  const got = userHome ? parseSaved(await $.fs.read(`${userHome}/${LIBRARY}/${id}.json`).catch(() => '')) : undefined
   return got && { ...got, id }
 }
 
@@ -1310,9 +1303,9 @@ async function deleteWorkflow($: Engine, id: string) {
     return
   }
   try {
-    const h = await home($)
-    if (!h) throw new Error('no home folder')
-    await $.fs.write(`${h}/${LIBRARY}/${id}.json`, '')
+    const userHome = await home($)
+    if (!userHome) throw new Error('no home folder')
+    await $.fs.write(`${userHome}/${LIBRARY}/${id}.json`, '')
   } catch (err) {
     $.ui.toast(`Couldn't delete · ${failure(err)}`)
     return
@@ -1405,8 +1398,8 @@ function actions($: Engine, inPane = false): Actions {
       // Nothing is removed while the reading is out (it names the agents and roles as they were when it was asked)
       // or an edit applies, and the last item stays: a workflow of none is never saved.
       if (s?.mode !== 'review' || !s.draft || s.draft.read === 'pending' || s.busy || itemCount(s.draft) <= 1) return s
-      const next = applyOps(s.draft, [{ op: 'remove', item }])
-      return next === s.draft ? s : { ...s, draft: next, undo: [...s.undo, s.draft], detail: undefined, error: undefined }
+      const trimmed = applyOps(s.draft, [{ op: 'remove', item }])
+      return trimmed === s.draft ? s : { ...s, draft: trimmed, undo: [...s.undo, s.draft], detail: undefined, error: undefined }
     })),
     wfKeep: () => void quietly(() => keepWorkflow($)),
     wfClose: () => void quietly(() => closeWorkflow($)),
