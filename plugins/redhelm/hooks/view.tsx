@@ -1,6 +1,6 @@
 import type { Elements } from 'claude-code'
 
-import type { Agent, Detail, Draft, Guard, Message, Note, Release, SavedWorkflow, SetupItem, WorkflowSheet as SheetState, Workspace } from '../types'
+import type { Agent, Detail, Draft, Guard, Message, Note, SavedWorkflow, SetupItem, WorkflowSheet as SheetState, Workspace } from '../types'
 import { agentSpec, LEFT_BEHIND } from './agentfile'
 import { editable, itemCount, projectKey } from './library'
 import { age, capital, excerpt, firstAsk, grouped, headlineOf, isStale, kilo, looksLikeQuestion, modelWords, overlaps, short, stateOf, type State } from './model'
@@ -35,8 +35,6 @@ export type Actions = {
   toggleBrief: () => void
   applySetup: () => void
   skipSetup: () => void
-  /** Installs the newer REDhelm through Claude Code's plugin update. */
-  update: () => void
   /** Prints where to report a problem into the conversation. */
   feedback: () => void
   /** Save: reads the session's latest stretch of agent work into the workflow sheet. */
@@ -89,8 +87,6 @@ export type View = {
   setup: SetupItem[]
   showDone: boolean
   aside: boolean
-  /** A newer REDhelm, when one is published. */
-  release: Release | null
   handles: Record<string, string>
   root: string
   /** 'light' or 'dark', from the person's Claude Code theme. */
@@ -1055,23 +1051,6 @@ export function WorkflowSheet({ els, v, act, columns, back }: { els: Els; v: Vie
   )
 }
 
-/** A newer REDhelm: one quiet line, never a pop-up. */
-function Update({ els, v, act }: { els: Els; v: View; act: Actions }) {
-  const { Box, Text, Button } = els
-  const r = v.release
-  if (!r) return null
-  if (r.state === 'updating') return <Text color="subtle">Updating REDhelm to {r.latest}…</Text>
-  if (r.state === 'updated') return <Text color="subtle" wrap="truncate-end">REDhelm {r.latest} installed · /reload-plugins to load it</Text>
-  return (
-    <Box gap={1}>
-      <Text color="subtle" wrap="truncate-end">{r.state === 'failed' ? 'Update failed' : `REDhelm ${r.latest} is out`}</Text>
-      <Box flexShrink={0}>
-        <Button key="update" plain dimColor label={r.state === 'failed' ? 'Retry' : 'Update'} hover={{ bold: true, scope: 'update' }} onPress={act.update} />
-      </Box>
-    </Box>
-  )
-}
-
 /** Where to report a problem: prints the links, full width in the conversation, so any terminal can open them. */
 function Feedback({ els, act }: { els: Els; act: Actions }) {
   const { Button } = els
@@ -1116,7 +1095,6 @@ function Tall({ els, v, act, columns, classic }: { els: Els; v: View; act: Actio
       {overlaps(v.agents).length > 0 && plate(<Overlaps els={els} v={v} />)}
       <Boards els={els} v={v} />
       {plate(<WorkflowsSection els={els} v={v} act={act} columns={columns} />)}
-      {v.release && plate(<Update els={els} v={v} act={act} />)}
       {plate(<Feedback els={els} act={act} />)}
     </Box>
   )
@@ -1214,7 +1192,6 @@ function Wide({ els, v, act, columns, rows, rule, classic }: { els: Els; v: View
         <Box flexShrink={0} gap={3}>
           <Header els={els} v={v} />
           <Spectrum els={els} v={v} width={20} />
-          <Update els={els} v={v} act={act} />
         </Box>
         <Box flexShrink={1} columnGap={3}>
           {right ? <Text color="subtle" wrap="truncate-end">{right}</Text> : <WideNotice els={els} v={v} />}

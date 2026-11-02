@@ -430,15 +430,3 @@ export function feedbackText(link: string) {
   ].join('\n')
 }
 
-/** Whether version `a` is newer than `b`, number by number ("0.10.0" beats "0.9.9"); one unreadable never is. */
-export function isNewer(a: string, b: string) {
-  const parse = (v: string) => (/^\d+(\.\d+)*$/.test(v.trim()) ? v.trim().split('.').map(Number) : null)
-  const x = parse(a), y = parse(b)
-  if (!x || !y) return false
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] ?? 0) - (y[i] ?? 0)
-    if (d) return d > 0
-  }
-  return false
-}
-

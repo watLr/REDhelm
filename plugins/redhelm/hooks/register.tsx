@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, HookStream, Register, SessionMessage, TurnStepChunk, TurnStepResult } from 'claude-code'
 
-import type { Agent, Draft, Guard, Note, Placement, Release, SavedType, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState } from '../types'
-import { DEFAULTS, LINES, activity, appearance, capital, feedbackLink, feedbackText, fromConversation, isNewer, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
+import type { Agent, Draft, Guard, Note, Placement, SavedType, SavedWorkflow, SetupItem, WorkflowMode, WorkflowSheet as SheetState } from '../types'
+import { DEFAULTS, LINES, activity, appearance, capital, feedbackLink, feedbackText, fromConversation, looksLikeQuestion, tidyPaths, type Said, handleOf, handles, base, changedFile, excerpt, kilo, kindOf, relative, remember, settings, short, span, staleTarget, type Settings } from './model'
 import { HEADLINE_EVERY_MS, headlineInput, headlineKey, labeler, titleInput, type Complete } from './labels'
 import { laneNames, workspaces, type Io } from './sources'
 import { PALETTES, RIPPLE_S, animates, backdrop, type Ripple } from './backdrop'
@@ -48,7 +48,6 @@ const placement = atom(PLACEMENT, 'right' as Placement)
 const collapsed = atom({ plugin: 'redhelm', key: 'collapsed' } as const, false)
 const setup = atom(SETUP, [] as SetupItem[])
 const usage = atom(USAGE, {})
-const release = atom({ plugin: 'redhelm', key: 'release' } as const, null as Release | null)
 const workflowSheet = atom({ plugin: 'redhelm', key: 'workflowSheet' } as const, null as SheetState | null)
 const workflowList = atom({ plugin: 'redhelm', key: 'workflowList' } as const, null as { workflows: SavedWorkflow[]; unreadable: number } | null)
 const workflowMode = atom({ plugin: 'redhelm', key: 'workflowMode' } as const, null as WorkflowMode)
@@ -270,46 +269,7 @@ async function received($: Engine, from: string, raw: string) {
   }
 }
 
-// A newer REDhelm
-
-/** REDhelm's own marketplace, the one that publishes the version checked below: `redhelm@redhelm`. */
-const MARKET = 'redhelm'
-/** The one copy the update check and Update serve: REDhelm from its own marketplace. */
-const OWN = 'redhelm@redhelm'
-const fromMarket = (id: string) => id.split('@')[1] ?? ''
-const CHECK_EVERY = 6 * 3_600_000
-const CHECK_SHARED_MS = 3_600_000
-
-/**
- * Compares the installed REDhelm with the published one. Only a copy from REDhelm's own marketplace
- * is offered it: a local folder is its own source, and another marketplace (the plugin directory)
- * ships the version it chose and updates it itself.
- */
-async function checkRelease($: Engine) {
-  // One check serves every open session for an hour: they share REDhelm's store.
-  const at = await $.clock.now()
-  const kept = (await $.store.get('release')) as { at: number; id: string; installed: string; latest: string } | undefined
-  let seen = kept && at - kept.at < CHECK_SHARED_MS ? kept : undefined
-  if (!seen) {
-    const listed = await $.process.run(['claude', 'plugin', 'list', '--json'], { timeoutMs: 20_000 })
-    const mine = (JSON.parse(listed.stdout) as { id: string; version: string }[]).find(p => p.id.startsWith('redhelm@'))
-    if (!mine) return update($, release, () => null)
-    let latest = ''
-    if (fromMarket(mine.id) === MARKET) {
-      // The published REDhelm's version, written out at the call so the plugin directory can read the one address.
-      const got = await $.http.fetch('https://raw.githubusercontent.com/watLr/redhelm/main/plugins/redhelm/.claude-plugin/plugin.json')
-      if (!got.ok) return
-      latest = String((JSON.parse(got.text) as { version?: unknown }).version ?? '')
-    }
-    seen = { at, id: mine.id, installed: mine.version, latest }
-    await $.store.set('release', seen)
-  }
-  const { id, installed, latest } = seen
-  if (fromMarket(id) !== MARKET) return update($, release, () => null)
-  await update($, release, was =>
-    was?.state === 'updated' || was?.state === 'updating' ? was
-      : isNewer(latest, installed) ? { id, installed, latest } : null)
-}
+// Feedback
 
 /**
  * Prints where to report a problem, for the person only: a command's text goes to the model on the next turn, a logged
@@ -322,32 +282,6 @@ async function printFeedback($: Engine) {
   const mine = await $.fs.read(`${root}/.claude-plugin/plugin.json`).then(t => String((JSON.parse(t) as { version?: unknown }).version ?? '')).catch(() => '')
   const claude = await $.session.version().then(v => v.version).catch(() => '')
   feedbackText(feedbackLink(mine, claude)).split('\n').forEach(line => $.ui.log(line))
-}
-
-/** Runs Claude Code's own plugin update; the new version loads on /reload-plugins or a restart. */
-async function updateNow($: Engine): Promise<string> {
-  const rel = await read($, release)
-  if (!rel) {
-    const kept = (await $.store.get('release')) as { id?: string } | undefined
-    const market = fromMarket(kept?.id ?? '')
-    if (market === 'inline') return 'REDhelm runs from a local folder · update it there'
-    if (market && market !== MARKET) return `REDhelm comes from ${market}, which keeps it up to date · claude plugin update ${kept!.id}`
-    return 'REDhelm is up to date'
-  }
-  if (rel.state === 'updating') return `REDhelm is already updating to ${rel.latest}`
-  if (rel.state === 'updated') return `REDhelm ${rel.latest} is installed · run /reload-plugins to load it`
-  // Only REDhelm's own copy is ever offered an update (checkRelease); the commands are written out in full.
-  if (rel.id !== OWN) return `REDhelm comes from ${fromMarket(rel.id)}, which keeps it up to date · claude plugin update ${rel.id}`
-  await update($, release, (r): Release | null => r && { ...r, state: 'updating', detail: undefined })
-  await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'redhelm'], { timeoutMs: 120_000 }).catch(() => undefined)
-  const r = await $.process.run(['claude', 'plugin', 'update', 'redhelm@redhelm'], { timeoutMs: 120_000 })
-    .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
-  const ok = r.exitCode === 0
-  if (ok) await $.store.delete('release').catch(() => undefined) // the next check reads the new version
-  await update($, release, (x): Release | null => x && { ...x, state: ok ? 'updated' : 'failed', detail: ok ? undefined : excerpt(r.stderr || r.stdout, 120) })
-  return ok
-    ? `REDhelm ${rel.latest} is installed · run /reload-plugins to load it`
-    : `REDhelm could not update: ${excerpt(r.stderr || r.stdout, 120) || 'unknown reason'} · try claude plugin update ${rel.id}`
 }
 
 // The model guard: what the person chose, what actually answers, and whether the session fell behind
@@ -371,11 +305,6 @@ let staleTold: string | undefined
 let shownStatus: string | undefined | null = null
 /** Whether python3 runs here (the shipped status lines need it); undefined until asked. */
 let hasPython: boolean | undefined
-/** The programs that show a desktop notification, tried in this order: macOS's, then Linux's. */
-const NOTIFIERS = ['osascript', 'notify-send'] as const
-type Notifier = (typeof NOTIFIERS)[number]
-/** The program that worked for desktop notifications here; null when none does. */
-let notifier: Notifier | null | undefined
 
 const statusText = (g: Guard) => {
   const model = [short(g.model), g.effort].filter(Boolean).join(' · ')
@@ -433,23 +362,9 @@ async function refresh($: Engine) {
   await checkStale($)
 }
 
-/** A desktop notification where the platform has one (macOS, Linux), else nothing beyond the toast. */
+/** A notification through Claude Code, on the channel the person's own notification setting names. One it can't send is let go. */
 async function notify($: Engine, title: string, subtitle: string, body: string) {
-  if (notifier === null) return
-  const q = (s: string) => `"${s.replace(/[\\"]/g, m => `\\${m}`)}"`
-  // Each program written out at its call, so the plugin directory can read what REDhelm runs; only the words vary.
-  const show = (via: Notifier) => via === 'osascript'
-    ? $.process.run(['osascript', '-e', `display notification ${q(body)} with title ${q(title)} subtitle ${q(subtitle)} sound name "Glass"`])
-    : $.process.run(['notify-send', title, `${subtitle}\n${body}`])
-  for (const via of notifier ? [notifier] : NOTIFIERS) {
-    try {
-      if ((await show(via)).exitCode === 0) {
-        notifier = via
-        return
-      }
-    } catch {}
-  }
-  notifier = null
+  await $.ui.notify(`${subtitle}\n${body}`, { title }).catch(() => undefined)
 }
 
 // The setup card: the Claude Code settings REDhelm brings, applied only when the person presses Apply
@@ -1383,7 +1298,6 @@ function actions($: Engine, inPane = false): Actions {
     toggleDone: () => void update($, showDone, x => !x),
     applySetup: () => void quietly(() => applySetup($)),
     skipSetup: () => void quietly(() => skipSetup($)),
-    update: () => void quietly(async () => $.ui.toast(await updateNow($))),
     feedback: () => void quietly(() => printFeedback($)),
     wfSave: () => void quietly(() => startSave($, 0)),
     wfEarlier: () => void quietly(async () => {
@@ -1456,7 +1370,6 @@ async function view($: Engine, site?: string): Promise<View> {
     setup: await read($, setup),
     showDone: await read($, showDone),
     aside: (await read($, draftKept)) !== null,
-    release: await read($, release),
     root,
     lanes: { ...tagged, ...laneNames(list) },
     traces: Object.fromEntries(traces),
@@ -1539,10 +1452,8 @@ export const register: Register = (on, options) => {
     timers = [
       $.clock.every(1500, () => void quietly(() => sync($))),
       $.clock.every(5000, () => void quietly(() => refresh($))),
-      $.clock.every(CHECK_EVERY, () => void quietly(() => checkRelease($))),
       $.clock.every(1000, () => void quietly(() => tick($))),
     ]
-    $.clock.after(2000, () => void quietly(() => checkRelease($)))
     void quietly(async () => {
       const items = await setupItems($)
       await update($, setup, () => items)
@@ -1570,10 +1481,8 @@ export const register: Register = (on, options) => {
       await quietly(() => printFeedback($))
       return {}
     }
-    if (arg === 'update') {
-      if (!(await read($, release))) await quietly(() => checkRelease($))
-      return { text: await updateNow($) }
-    }
+    // REDhelm updates as any plugin does: this only says how, and runs nothing.
+    if (arg === 'update') return { text: 'REDhelm updates through Claude Code, like any plugin: claude plugin update redhelm@redhelm, or /plugin' }
     autoOpened = true // the person has taken charge of the panel; the commands above only print
     if (arg === 'setup') {
       const items = await setupItems($, true)

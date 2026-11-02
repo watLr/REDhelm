@@ -1,6 +1,6 @@
 # REDhelm privacy policy
 
-Effective: 2026-11-01
+Effective: 2026-11-02
 
 REDhelm is a plugin for Claude Code. It runs on your computer, inside Claude Code. It has no server of its own, no account and no analytics. This policy says what REDhelm reads, what it keeps, what leaves your machine, and how to turn each part off.
 
@@ -11,7 +11,6 @@ Everything REDhelm reads, it reads on your machine.
 - **Your project's files.** Work boards in the project folder, in the few folders above it and in the folders right inside it: lane boards (`docs/aaa/board/`), status boards (`.status-board/`), REDStudio (`.redstudio/`) and REDManager (`.redmanager/`). For workflows, the agent type files in the project's `.claude/agents/` folder. When you press **Run** on a workflow that carries copied agent types, also the agent files in `~/.claude/agents/`, to see which types you already have.
 - **Claude Code's session data.** This session's conversation, each agent's own conversation, the agents Claude Code lists, and which models answered. When you press **Run** on a workflow whose lead used skills, also this session's slash commands, to see which of those skills it has.
 - **Claude Code's settings.** Your model and theme, the `/config` rows its setup card offers, and `~/.claude/settings.json` for its status lines.
-- **Your installed plugins.** It runs `claude plugin list` to see which REDhelm is installed and where it came from, for the update check.
 - **Version numbers.** REDhelm's own version and Claude Code's, when you press **Feedback** or run `/redhelm feedback`, to fill in the feedback link.
 - **Your computer.** Whether your desktop is light or dark (for Claude Code's `auto` theme), and whether `python3` runs (for its status lines).
 - **Your saved workflows**, in `~/.claude/redhelm/workflows/`, when you press **Save** (to give a new one a name no other has), **Load** or **Run**.
@@ -24,8 +23,7 @@ If you apply its status lines, their scripts read what Claude Code hands a statu
 - **Across sessions, in REDhelm's plugin storage.** This is a file of REDhelm's own that Claude Code keeps in its configuration folder on your machine. It holds:
   - model switches: when, from which model to which, and how the switch was made, such as by you or by Claude Code on its own (the latest 100);
   - the newest version of each model family seen;
-  - which setup card items you applied or set aside;
-  - the release check: when it ran, which REDhelm is installed and its version, and the latest version published.
+  - which setup card items you applied or set aside.
 - **In `~/.claude/redhelm/`.**
   - `statusline/` and `state/`: copies of REDhelm's status line scripts, and the newest model versions they have seen. These exist only if you applied the status lines.
   - `workflows/`: the workflows you save, one file each, never in your project. A workflow holds what its review sheet showed you before you pressed **Save**: its name and purpose; the lead's skills and practices, and the model and effort it ran on; the shared brief parts every agent's brief should include, as written; the team, each role or agent with its label, type and settings (and an agent's name, when it had one), the tools and skills it used, and the team it started (for a role, also one line on what it does and how many agents filled it) (in a lineup, also each agent's description and brief, as written); copies of the project's own agent type files the team ran as; the project folder's name; and when you saved it. The folder's full path is never saved, only a hash of it. A workflow stays until you delete it with **Delete**, which empties its file, or remove the file yourself.
@@ -35,7 +33,6 @@ REDhelm writes no file into your project.
 
 ## What leaves your machine
 
-- **The update check.** Only a copy installed from REDhelm's own marketplace checks. It reads REDhelm's published version number from GitHub (`raw.githubusercontent.com`), shortly after a session starts and every six hours; one check serves all your open sessions for an hour. The request carries nothing about you or your work. GitHub receives it as it receives any web request. A copy from another marketplace, such as the plugin directory, or from a local folder, never checks. When you press **Update** or run `/redhelm update`, REDhelm runs Claude Code's own plugin update, which downloads the new version from the marketplace.
 - **Model calls.** REDhelm asks Claude Code's models for a few things. Each request goes through Claude Code, with your session's own credentials, to the same provider as the rest of your session, and counts toward your usage. REDhelm sends them nowhere else.
   - **Headlines and question titles** (Claude Code's small model, Haiku, at low effort), only while REDhelm is on screen. Each request carries an agent's task (its first 300 characters), its latest steps and words, or a question an agent asked. One request at a time, and no more than 30 an hour.
   - **Telling a question from a report** (Claude Code's small model). Each message an agent sends to the main conversation is read once, to see whether it waits for your answer. The request carries the message, with your project and home folder paths shortened. `/redhelm models` does not count it: Claude Code returns no usage for this kind of request.
@@ -44,12 +41,13 @@ REDhelm writes no file into your project.
 
   `/redhelm models` shows how many requests the headlines and the workflow calls made this session.
 - **Feedback links, only if you open one.** The sidebar's **Feedback** and `/redhelm feedback` only print links in your conversation, not to Claude, and send nothing themselves. Opening the feedback link gives GitHub your REDhelm and Claude Code versions. Nothing is posted until you submit a form.
-- **Nothing else.** Desktop notifications after long turns are shown by your own system.
+- **Nothing else.** The notification after a long turn goes through Claude Code's own notification setting. Where that setting shows text, it shows your project's name, how long the turn took and the first line of Claude's answer, cut to 140 characters.
 
 ## What it never does
 
 - No analytics, no telemetry, no tracking.
 - No server of REDhelm's own: only what this policy lists leaves your machine.
+- No web requests of its own. REDhelm updates through Claude Code, like any plugin, and never checks for a newer version itself.
 - Nothing is sold or shared.
 - A workflow is never saved into your project or published.
 
@@ -62,7 +60,7 @@ A saved workflow does nothing on its own. It affects a later session only when y
 - **Headlines, question titles and the question check:** set **Labels** to plain in `/config`. REDhelm's own wording check then decides whether a message is a question.
 - **Workflow reading and edits:** set **Workflow reading** to off in `/config`. Save then keeps only what REDhelm saw, and Edit is not offered.
 - **A saved workflow:** open it from **Load** and press **Delete** twice, or remove its file from `~/.claude/redhelm/workflows/`.
-- **All of it:** disable or uninstall REDhelm (`claude plugin disable` or `claude plugin uninstall`). This also stops the update check, which has no setting of its own. REDhelm has no step that removes what it kept: delete `~/.claude/redhelm/`, and its status lines in `~/.claude/settings.json`, if you want them gone. Its plugin storage (the file in Claude Code's configuration folder that holds the model switches, the model versions seen, the setup items handled and the last update check) may stay in place after you uninstall.
+- **All of it:** disable or uninstall REDhelm (`claude plugin disable` or `claude plugin uninstall`). REDhelm has no step that removes what it kept: delete `~/.claude/redhelm/`, and its status lines in `~/.claude/settings.json`, if you want them gone. Its plugin storage (the file in Claude Code's configuration folder that holds the model switches, the model versions seen and the setup items handled) may stay in place after you uninstall.
 
 ## Headless runs
 

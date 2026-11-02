@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { appearance, feedbackLink, feedbackText, grouped, tidyPaths, looksLikeQuestion, isNewer, age, firstAsk, plainHeadline, stateOf, DEFAULTS, activity, handleOf, handles, settings, foldLanes, foldStatusBoard, isStale, kindOf, overlaps, parseRun, parseStandards, phase, remember, short, staleTarget } from '../hooks/model'
+import { appearance, feedbackLink, feedbackText, grouped, tidyPaths, looksLikeQuestion, age, firstAsk, plainHeadline, stateOf, DEFAULTS, activity, handleOf, handles, settings, foldLanes, foldStatusBoard, isStale, kindOf, overlaps, parseRun, parseStandards, phase, remember, short, staleTarget } from '../hooks/model'
 import { workspaces, type Io } from '../hooks/sources'
 import { label, rack, relevant, shortName, summary, type View } from '../hooks/view'
 import { bars, buckets, burst, mix, rasterCells, record, spectrum, speed, tail } from '../hooks/trace'
@@ -199,7 +199,7 @@ describe('the pane', () => {
 describe('the rack', () => {
   test('orders strips by who needs you next and pulls out the ones that do', async () => {
     const v = {
-      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, reading: true, workflow: null, library: null,
+      now: 0, notes: [], workspaces: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, root: '/p', handles: {}, lanes: {}, traces: {}, at: 0, motion: true, reading: true, workflow: null, library: null,
       agents: [
         agent({ id: 'run', startedAt: 1 }),
         agent({ id: 'done', status: 'completed', endedAt: 5 }),
@@ -253,16 +253,16 @@ describe('what REDhelm brings to Claude Code', () => {
     await ui.unmount()
   })
 
-  for (const key of ['redhelm.placement', 'redhelm@inline.placement']) {
-    test(`/redhelm bottom and right save REDhelm's own placement (${key}) and nothing else`, async ($: any, on: any) => {
+  for (const field of ['redhelm.placement', 'redhelm@inline.placement']) {
+    test(`/redhelm bottom and right save REDhelm's own placement (${field}) and nothing else`, async ($: any, on: any) => {
       const written: [string, unknown][] = []
       const row = (k: string) => ({ key: k, label: 'x', kind: 'choice', value: 'right', options: ['right', 'bottom'], isLocked: false })
-      on('config.list', () => ({ value: [row('other.placement'), row(key)] }))
+      on('config.list', () => ({ value: [row('other.placement'), row(field)] }))
       on('config.set', (_: any, e: any) => (written.push([e.key, e.value]), { value: e.value }))
       await engine(on, true)($)
       await $.command.run({ command: 'redhelm', args: 'bottom', origin: { kind: 'person' }, presentation: {} } as any)
       await $.command.run({ command: 'redhelm', args: 'right', origin: { kind: 'person' }, presentation: {} } as any)
-      expect(written).toEqual([[key, 'bottom'], [key, 'right']])
+      expect(written).toEqual([[field, 'bottom'], [field, 'right']])
     })
   }
 
@@ -475,7 +475,7 @@ describe('messaging an agent', () => {
 })
 
 describe('what REDhelm chooses to show', () => {
-  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, release: null, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, reading: true, workflow: null, library: null }
+  const base = { now: 0, notes: [], inbox: [], guard: {}, inspecting: null, briefOpen: false, theme: 'dark' as const, composing: null, setup: [], showDone: false, aside: false, handles: {}, lanes: {}, traces: {}, at: 0, motion: true, reading: true, workflow: null, library: null }
 
   test("only this session's workflows, or ones an agent here is changing; finished runs stay quiet", async () => {
     const ws = (dir: string, extra: object) => ({ dir, name: dir.split('/').pop()!, ...extra })
@@ -1117,75 +1117,39 @@ describe('feedback', () => {
   })
 })
 
-describe('a newer REDhelm', () => {
-  const installed = (id: string, version: string) => ({ value: { exitCode: 0, stdout: JSON.stringify([{ id, version, enabled: true }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-  const published = (version: string) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ name: 'redhelm', version }) } })
-
-  test('is offered in one quiet line, and Update runs the plugin update', async ($: any, on: any) => {
+describe('updates', () => {
+  test('/redhelm update only says how Claude Code updates REDhelm: it runs nothing and fetches nothing', async ($: any, on: any) => {
     const ran: string[] = []
-    on('process.run', (_$: any, e: any) => (ran.push(e.argv.join(' ')), e.argv.includes('list') ? installed('redhelm@redhelm', '0.4.5') : installed('', '')))
-    on('http.fetch', () => published('0.5.0'))
-    await engine(on, true)($)
-    await clock.advance(3_000)
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /0\.5\.0 is out/ })).toBeDefined()
-    await ui.press({ key: 'update' })
-    await clock.advance(100)
-    expect(ran).toContain('claude plugin update redhelm@redhelm')
-    expect(await ui.find({ type: 'Text', text: /\/reload-plugins/ })).toBeDefined()
-    await ui.unmount()
-  })
-
-  test('/redhelm update does the same from the keyboard', async ($: any, on: any) => {
-    const ran: string[] = []
-    on('process.run', (_$: any, e: any) => (ran.push(e.argv.join(' ')), installed('redhelm@redhelm', '0.4.5')))
-    on('http.fetch', () => published('0.5.0'))
-    await engine(on, true)($)
-    await clock.advance(3_000)
-    const r = await $.command.run({ command: 'redhelm', args: 'update', origin: { kind: 'person' }, presentation: {} } as any)
-    expect(r.text).toMatch(/0\.5\.0/)
-    expect(ran).toContain('claude plugin update redhelm@redhelm')
-  })
-
-  test('says nothing when REDhelm is up to date', async ($: any, on: any) => {
-    on('process.run', () => installed('redhelm@redhelm', '0.4.5'))
-    on('http.fetch', () => published('0.4.5'))
-    await engine(on, true)($)
-    await clock.advance(3_000)
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ key: 'update' })).toBeUndefined()
-    await ui.unmount()
-  })
-
-  test('says nothing when REDhelm runs from a local folder, which is its own source', async ($: any, on: any) => {
-    on('process.run', () => installed('redhelm@inline', '0.4.5'))
-    on('http.fetch', () => published('0.5.0'))
-    await engine(on, true)($)
-    await clock.advance(3_000)
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ key: 'update' })).toBeUndefined()
-    await ui.unmount()
-  })
-
-  test('says nothing when another marketplace, such as the plugin directory, installed it: that one updates it', async ($: any, on: any) => {
     let fetched = 0
-    on('process.run', () => installed('redhelm@claude-plugins-official', '0.4.5'))
-    on('http.fetch', () => (fetched++, published('0.5.0')))
+    on('process.run', (_$: any, e: any) => (ran.push(e.argv.join(' ')), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('http.fetch', () => (fetched++, { value: { status: 200, ok: true, headers: {}, text: '{}' } }))
     await engine(on, true)($)
     await clock.advance(3_000)
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ key: 'update' })).toBeUndefined()
-    await ui.unmount()
-    expect(fetched).toBe(0)
+    const before = [...ran]
     const r = await $.command.run({ command: 'redhelm', args: 'update', origin: { kind: 'person' }, presentation: {} } as any)
-    expect(r.text).toMatch(/comes from claude-plugins-official.*claude plugin update redhelm@claude-plugins-official/)
+    expect(r.text).toBe('REDhelm updates through Claude Code, like any plugin: claude plugin update redhelm@redhelm, or /plugin')
+    expect(ran).toEqual(before)
+    expect(ran.filter(c => c.startsWith('claude'))).toEqual([])
+    expect(fetched).toBe(0)
   })
+})
 
-  test('versions compare by number, not by text', () => {
-    expect(isNewer('0.10.0', '0.9.9')).toBe(true)
-    expect(isNewer('0.4.5', '0.4.5')).toBe(false)
-    expect(isNewer('0.4.4', '0.4.5')).toBe(false)
-    expect(isNewer('garbage', '0.4.5')).toBe(false)
+describe('a long turn', () => {
+  test('ends with one notification through Claude Code, and runs no program for it', async ($: any, on: any) => {
+    const notified: any[] = []
+    const ran: string[] = []
+    on('ui.notify', (_$: any, e: any) => (notified.push(e), { value: { isSent: true, channel: 'iterm2' } }))
+    on('process.run', (_$: any, e: any) => (ran.push(e.argv.join(' ')), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('turn.complete', () => ({ text: '' }))
+    await engine(on, true)($)
+    await clock.settle()
+    const before = [...ran]
+    await $.turn.complete({ answer: 'Done', durationMs: 119_000, isAborted: false, turnId: 't1', reason: 'answer' })
+    expect(notified).toEqual([]) // shorter than the 120 seconds set
+    const said = 'Migrated the schema. '.repeat(10)
+    await $.turn.complete({ answer: `${said}\nAll tests pass.`, durationMs: 150_000, isAborted: false, turnId: 't2', reason: 'answer' })
+    expect(notified.map(n => [n.title, n.text])).toEqual([['Claude Code · p', `Finished after 2m\n${said.slice(0, 139)}…`]])
+    expect(ran).toEqual(before)
   })
 })
 

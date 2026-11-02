@@ -83,9 +83,9 @@ export function labeler() {
     if (cache.size > CACHE) cache.delete(cache.keys().next().value!)
   }
   return {
-    /** `key`: what the label is about (the input itself unless given); a new key is a new label. */
-    async ask(complete: Complete, kind: Kind, id: string, input: string, at: number, key = hash(input)): Promise<string | undefined> {
-      const k = `${kind}:${key}`
+    /** `about`: what the label is about (the input itself unless given); a new one is a new label. */
+    async ask(complete: Complete, kind: Kind, id: string, input: string, at: number, about = hash(input)): Promise<string | undefined> {
+      const k = `${kind}:${about}`
       if (cache.has(k)) return cache.get(k) ?? undefined
       const who = `${kind}:${id}`
       while (sent.length && at - sent[0]! >= 3_600_000) sent.shift()

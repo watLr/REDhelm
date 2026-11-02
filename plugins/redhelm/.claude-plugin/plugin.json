@@ -1,6 +1,6 @@
 {
   "name": "redhelm",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "A live control panel for your Claude Code agents: activity traces, questions that wait for you, an agent sheet with Message and Stop, and a model guard.",
   "author": {
     "name": "watLr",
@@ -10,7 +10,6 @@
   "repository": "https://github.com/watLr/redhelm",
   "license": "MIT",
   "privacyPolicyUrl": "https://github.com/watLr/redhelm/blob/main/PRIVACY.md",
-  "types": "./types/index.d.ts",
   "userConfig": {
     "placement": {
       "type": "string",
@@ -46,8 +45,8 @@
     },
     "notifyAfter": {
       "type": "number",
-      "title": "Desktop notification after turns longer than (seconds)",
-      "description": "0 turns desktop notifications off.",
+      "title": "Notification after turns longer than (seconds)",
+      "description": "0 turns these notifications off.",
       "default": 120
     },
     "autoOpen": {

@@ -32,21 +32,20 @@ Restart running sessions (`/restart`), then run `/redhelm` once to open it. Afte
 
 ## Privacy and cost
 
-REDhelm reads your project folder and Claude Code's session data on your machine, and keeps what it remembers there too. Installed from its own marketplace, it checks GitHub a few times a day for a newer version, sending nothing about you; from the plugin directory, the directory's updates apply instead. Headlines, and the reading of each message an agent sends you to tell a question from a report, are short requests to Claude Code's small model that count toward your usage; set **Labels** to plain in `/config` to turn them off, and REDhelm's wording check decides instead. A workflow's **Save** and **Edit** ask Claude Code's Sonnet, only when you press them; set **Workflow reading** to off to turn that off. No analytics, no telemetry, no server of REDhelm's own. The details are in the [privacy policy](https://github.com/watLr/redhelm/blob/main/PRIVACY.md).
+REDhelm reads your project folder and Claude Code's session data on your machine, and keeps what it remembers there too. Headlines, and the reading of each message an agent sends you to tell a question from a report, are short requests to Claude Code's small model that count toward your usage; set **Labels** to plain in `/config` to turn them off, and REDhelm's wording check decides instead. A workflow's **Save** and **Edit** ask Claude Code's Sonnet, only when you press them; set **Workflow reading** to off to turn that off. No analytics, no telemetry, no server of REDhelm's own. The details are in the [privacy policy](https://github.com/watLr/redhelm/blob/main/PRIVACY.md).
 
 ## What REDhelm runs, sends and changes
 
 **Programs it runs**, each written out in full in its code:
 
-- `claude plugin list --json`: which REDhelm is installed and where it came from, for the update check, at most once an hour across your sessions
-- `claude plugin marketplace update redhelm` and `claude plugin update redhelm@redhelm`: only when you press **Update** or run `/redhelm update`, and only for a copy from REDhelm's own marketplace. Claude Code then downloads the new version from that marketplace, REDhelm's repository on GitHub.
 - `python3 --version`: whether its status lines can run
 - `defaults read -g AppleInterfaceStyle` on macOS, or `gsettings get org.gnome.desktop.interface color-scheme` on Linux: whether your desktop is light or dark, for Claude Code's `auto` theme
-- `osascript` on macOS, or `notify-send` on Linux: a desktop notification after a turn longer than you set in `/config` (0 turns it off)
+
+**Notifications:** after a turn longer than you set in `/config` (0 turns it off), REDhelm asks Claude Code to notify you. It goes through Claude Code's own notification setting. Where that setting shows text, it shows your project's name, how long the turn took and the first line of Claude's answer, cut to 140 characters.
 
 **What it sends, and where:**
 
-- One web request of its own, from a copy installed from REDhelm's own marketplace only: `https://raw.githubusercontent.com/watLr/redhelm/main/plugins/redhelm/.claude-plugin/plugin.json`, the published version number. It carries nothing about you. A copy from the plugin directory never makes it.
+- No web requests of its own.
 - Model calls, through Claude Code with your own sign-in, to the same provider as your session: parts of your conversation and your agents' work, for headlines, question titles, telling a question from a report, and a workflow's **Save**, **Earlier** and **Edit**. The privacy policy lists what each one carries, and `/config` turns them off.
 - Nothing else. REDhelm reads your Claude Code settings only for your model, your theme, its status lines and the settings its setup card offers, and `HOME` (`USERPROFILE` on Windows) for your home folder. It uses nothing else from them, and sends none of it anywhere.
 

@@ -24,7 +24,7 @@ class Fault {
 
 /** The keys a spec reads: one of them set twice cannot be carried as written. A key it never reads may repeat. */
 const READ = ['name', 'description', 'tools', 'disallowedTools', 'model', 'effort', 'maxTurns', 'skills', 'initialPrompt', 'memory', 'background', 'isolation']
-const KEY = /^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*))?$/
+const FIELD_LINE = /^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*))?$/
 const ITEM = /^\s*-(?:\s|$)/
 const COMMENT = /^\s*#/
 
@@ -51,7 +51,7 @@ function frontMatter(definition: string): FrontMatter | undefined {
       continue
     }
     if (l.startsWith('#')) continue
-    const m = KEY.exec(l)
+    const m = FIELD_LINE.exec(l)
     if (!m) {
       error ??= `Front matter line ${i + 1} isn't key: value`
       open = undefined
@@ -114,8 +114,8 @@ function dedent(block: readonly string[]) {
 }
 
 /** A value as text: a `|` block as its lines; a `>` block, or a plain value over several lines, folded to one; quotes taken off. */
-function textOf(key: string, e: Written): string | Fault {
-  const fault = new Fault(`${key} isn't text`)
+function textOf(field: string, e: Written): string | Fault {
+  const fault = new Fault(`${field} isn't text`)
   if (/^[|>]/.test(e.text)) {
     if (!/^[|>][-+0-9]*(?:\s+#.*)?$/.test(e.text)) return fault
     const lines = dedent(e.block)
@@ -154,9 +154,9 @@ function items(text: string): string[] | undefined {
  * A value as a list: `[a, b]`, `a, b`, or `- a` lines. Anything else is no list, never names read out
  * of it: a `|` or `>` block, a map, text after a closing quote.
  */
-function listOf(key: string, e: Written): string[] | Fault {
+function listOf(field: string, e: Written): string[] | Fault {
   const rest = said(e)
-  const fault = new Fault(`${key} isn't a list`)
+  const fault = new Fault(`${field} isn't a list`)
   if (!e.text) return (rest.every(l => ITEM.test(l)) && valuesOf(rest.map(l => l.replace(ITEM, '')))) || fault
   if (/^[|>{]/.test(e.text) || rest.some(l => ITEM.test(l))) return fault
   const text = [e.text, ...rest].join(' ')
@@ -180,16 +180,16 @@ const CARRIED: readonly (readonly [Exclude<keyof AgentSpecIn, 'name' | 'descript
 ]
 
 /** A key's value as its kind reads it; `false` and empty text are none. */
-function valueOf(key: string, kind: Kind, e: Written): unknown {
+function valueOf(field: string, kind: Kind, e: Written): unknown {
   if (kind === 'list' || kind === 'tools') {
-    const list = listOf(key, e)
-    return kind === 'tools' && Array.isArray(list) && !list.length ? new Fault(`${key} is empty`) : list
+    const list = listOf(field, e)
+    return kind === 'tools' && Array.isArray(list) && !list.length ? new Fault(`${field} is empty`) : list
   }
-  const t = textOf(key, e)
+  const t = textOf(field, e)
   if (t instanceof Fault || kind === 'text' || !t) return t || undefined
-  if (kind === 'flag') return /^true$/i.test(t) || (/^false$/i.test(t) ? undefined : new Fault(`${key} isn't true or false`))
-  if (kind === 'turns') return /^[1-9]\d*$/.test(t) ? Number(t) : new Fault(`${key} isn't a whole number`)
-  return kind.includes(t) ? t : new Fault(`${key} isn't ${or(kind)}`)
+  if (kind === 'flag') return /^true$/i.test(t) || (/^false$/i.test(t) ? undefined : new Fault(`${field} isn't true or false`))
+  if (kind === 'turns') return /^[1-9]\d*$/.test(t) ? Number(t) : new Fault(`${field} isn't a whole number`)
+  return kind.includes(t) ? t : new Fault(`${field} isn't ${or(kind)}`)
 }
 
 /** The name a project's agent file gives its type, as Claude Code dispatches it; undefined when it gives none. */
@@ -210,9 +210,9 @@ export function agentSpec(definition: string): { spec: AgentSpecIn; leftBehind: 
   const fm = frontMatter(lf(definition))
   if (!fm) return { error: 'No front matter' }
   if (fm.error) return { error: fm.error }
-  const read = (key: string, kind: Kind) => {
-    const e = fm.fields.get(key)
-    return e && !blank(e) ? valueOf(key, kind, e) : undefined
+  const read = (field: string, kind: Kind) => {
+    const e = fm.fields.get(field)
+    return e && !blank(e) ? valueOf(field, kind, e) : undefined
   }
   const name = read('name', 'text')
   const description = read('description', 'text')
@@ -221,10 +221,10 @@ export function agentSpec(definition: string): { spec: AgentSpecIn; leftBehind: 
   if (description instanceof Fault) return { error: description.error }
   if (!description) return { error: 'No description' }
   const spec: Record<string, unknown> = { name, description, prompt: fm.body }
-  for (const [key, kind] of CARRIED) {
-    const v = read(key, kind)
+  for (const [field, kind] of CARRIED) {
+    const v = read(field, kind)
     if (v instanceof Fault) return { error: v.error }
-    if (v !== undefined) spec[key] = v
+    if (v !== undefined) spec[field] = v
   }
   return { spec: spec as AgentSpecIn, leftBehind: LEFT_BEHIND.filter(k => fm.fields.has(k)) }
 }
