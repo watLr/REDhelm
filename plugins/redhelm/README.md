@@ -41,7 +41,9 @@ REDhelm reads your project folder and Claude Code's session data on your machine
 - `python3 --version`: whether its status lines can run
 - `defaults read -g AppleInterfaceStyle` on macOS, or `gsettings get org.gnome.desktop.interface color-scheme` on Linux: whether your desktop is light or dark, for Claude Code's `auto` theme
 
-**Notifications:** after a turn longer than you set in `/config` (0 turns it off), REDhelm asks Claude Code to notify you. It goes through Claude Code's own notification setting. Where that setting shows text, it shows your project's name, how long the turn took and the first line of Claude's answer, cut to 140 characters.
+Each of these only reads. REDhelm uses the answer on your machine and sends it nowhere.
+
+**Notifications:** after a turn longer than you set in `/config` (0 turns it off), REDhelm asks Claude Code to notify you, with Claude Code's own `$.ui.notify` call. It goes through Claude Code's own notification setting. Where that setting shows text, it shows your project's name, how long the turn took and the first line of Claude's answer, cut to 140 characters.
 
 **What it sends, and where:**
 
